@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { X } from "@phosphor-icons/react";
+import { createUuid } from "../utils/createUuid.js";
 
 async function request(action, body) {
   const response = await fetch(`/__serein/narrative-${action}`, {
@@ -18,7 +19,8 @@ export function NarrativeCreateDialog({ onClose, onCreated }) {
   const [sources, setSources] = useState([]);
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
-  const requestId = useRef(crypto.randomUUID());
+  const requestId = useRef(null);
+  if (requestId.current === null) requestId.current = createUuid();
   useEffect(() => {
     const node = dialog.current;
     node.showModal();
@@ -26,7 +28,7 @@ export function NarrativeCreateDialog({ onClose, onCreated }) {
   }, []);
   const search = async () => {
     setBusy("search"); setError(""); setResult(null); setSources([]);
-    requestId.current = crypto.randomUUID();
+    requestId.current = createUuid();
     try {
       const found = await request("discover-theme", { theme });
       setResult(found); setSources(found.sources || []); setTitle(found.title || "");
@@ -52,7 +54,7 @@ export function NarrativeCreateDialog({ onClose, onCreated }) {
       {busy === "search" ? "正在寻找、整理材料…" : result ? "重新找材料" : "找材料"}</button>
     {result && <section className="narrative-create__result">
       <label>书名 <small>{Array.from(title).length}/16</small><input value={title} disabled={Boolean(busy)}
-        onChange={(event) => { setTitle(Array.from(event.target.value).slice(0, 16).join("")); requestId.current = crypto.randomUUID(); }} /></label>
+        onChange={(event) => { setTitle(Array.from(event.target.value).slice(0, 16).join("")); requestId.current = createUuid(); }} /></label>
       <p>{result.outline}</p>
       <p className="narrative-create__hint">{sources.length} 条材料 · 按时间排列 · 至少保留 2 条</p>
       {!sources.length && <p>还没找到足够贴合的材料，换一种描述试试。</p>}
@@ -60,7 +62,7 @@ export function NarrativeCreateDialog({ onClose, onCreated }) {
         <div><small>{source.date?.slice(0, 10) || "日期未记录"} · {{ event: "Event", scene: "Scene", diary: "日记" }[source.source_type]}</small>
           <strong>{source.title}</strong><p>{source.reason}</p></div>
         <button type="button" disabled={Boolean(busy)} aria-label={`移除材料：${source.title}`} onClick={() => {
-          setSources(sources.filter((item) => item !== source)); requestId.current = crypto.randomUUID();
+          setSources(sources.filter((item) => item !== source)); requestId.current = createUuid();
         }}><X size={16} /></button>
       </li>)}</ol>
       {(result.warnings || []).map((warning) => <p key={warning} role="status">{warning}</p>)}
