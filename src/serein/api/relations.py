@@ -25,6 +25,9 @@ def routes(settings,auth):
     @router.get('/api/scene-edge-proposals')
     async def proposals(status: str='pending',proposal_id: str='',anchor_scene_id: str='',limit: int=20,include_context: bool=False):
         from ..compat.jobs import scene_job_failures
+        if status == 'error':
+            failures = scene_job_failures(settings)
+            return response({'status':'ok','count':len(failures),'proposals':[], 'failed_jobs':failures})
         result = await linker.list_proposals(scenes,status=status,proposal_id=proposal_id,
             anchor_scene_id=anchor_scene_id,limit=max(1,min(100,limit)),include_context=include_context)
         return response({**result, 'failed_jobs': scene_job_failures(settings)})

@@ -7,6 +7,7 @@ const statusLabels = {
   accepted: "已接受",
   rejected: "已拒绝",
   superseded: "已过期",
+  error: "错误",
   all: "全部",
 };
 
@@ -49,7 +50,7 @@ export function BasementRelationshipProposals() {
   const [draft, setDraft] = useState(emptyDraft);
 
   const load = async (nextFilter = filter) => {
-    setState((current) => ({ ...current, status: "loading", error: "" }));
+    setState({ status: "loading", payload: null, error: "" });
     try {
       const [proposalResponse, edgeResponse] = await Promise.all([
         fetch("/__serein/memory/scene-edge-proposals", {
@@ -57,7 +58,7 @@ export function BasementRelationshipProposals() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ status: nextFilter, limit: 50 }),
         }),
-        fetch("/__serein/memory/scene-edges", {
+        nextFilter === "error" ? Promise.resolve(null) : fetch("/__serein/memory/scene-edges", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: "{}",
@@ -65,10 +66,10 @@ export function BasementRelationshipProposals() {
       ]);
       const [proposalPayload, edgePayload] = await Promise.all([
         proposalResponse.json(),
-        edgeResponse.json(),
+        edgeResponse ? edgeResponse.json() : Promise.resolve({ edges: [] }),
       ]);
       if (!proposalResponse.ok) throw new Error(proposalPayload?.message || proposalPayload?.error || "没有读到关系提案");
-      if (!edgeResponse.ok) throw new Error(edgePayload?.message || edgePayload?.error || "没有读到关系边历史");
+      if (edgeResponse && !edgeResponse.ok) throw new Error(edgePayload?.message || edgePayload?.error || "没有读到关系边历史");
       setState({ status: "done", payload: { ...proposalPayload, edges: edgePayload.edges || [] }, error: "" });
     } catch (error) {
       setState({ status: "error", payload: null, error: error instanceof Error ? error.message : "没有读到关系提案" });
@@ -86,9 +87,9 @@ export function BasementRelationshipProposals() {
     return () => window.removeEventListener("keydown", closeOnEscape);
   }, [scenePreview]);
 
-  const proposals = state.payload?.proposals ?? [];
-  const edges = state.payload?.edges ?? [];
-  const failedJobs = state.payload?.failed_jobs ?? [];
+  const proposals = filter === "error" ? [] : state.payload?.proposals ?? [];
+  const edges = filter === "error" ? [] : state.payload?.edges ?? [];
+  const failedJobs = filter === "error" ? state.payload?.failed_jobs ?? [] : [];
   const retryJob = async (job) => {
     setEdgeActionId(job.attempt_id);
     try {
@@ -250,28 +251,28 @@ export function BasementRelationshipProposals() {
         </div>
         <div className="basement-live-note">
           <i aria-hidden="true" />
-          <span>真实提案库 · {state.payload?.count ?? proposals.length} 条</span>
+          <span>{filter === "error" ? "未完成任务" : "真实提案库"} · {state.payload?.count ?? (filter === "error" ? failedJobs.length : proposals.length)} 条</span>
         </div>
       </header>
 
       <div className="review-toolbar">
         <label>查看
-          <select value={filter} onChange={(event) => setFilter(event.target.value)}>
+          <select value={filter} onChange={(event) => { setComposerOpen(false); setFilter(event.target.value); }}>
             {Object.entries(statusLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
           </select>
         </label>
         <button type="button" onClick={() => load(filter)} disabled={state.status === "loading"}>
           <ArrowClockwise size={15} className={state.status === "loading" ? "is-spinning" : ""} aria-hidden="true" />刷新
         </button>
-        <button type="button" onClick={() => { setDraft(emptyDraft()); setComposerOpen((open) => !open); }}>
+        {filter !== "error" && <button type="button" onClick={() => { setDraft(emptyDraft()); setComposerOpen((open) => !open); }}>
           <Plus size={15} aria-hidden="true" />手动提案
-        </button>
+        </button>}
       </div>
 
-      <aside className="review-boundary-note">
+      {filter !== "error" && <aside className="review-boundary-note">
         <WarningCircle size={17} aria-hidden="true" />
         <p><strong>相似，不等于有关联。</strong>接受前会再验两端 active 状态、内容 hash 与逐字证据；只有通过审核的边，才会出现在记忆卡的“关联 Scene”。</p>
-      </aside>
+      </aside>}
 
       {failedJobs.length > 0 && (
         <section className="relationship-manual-form" aria-label="未完成的关联任务">
@@ -290,7 +291,7 @@ export function BasementRelationshipProposals() {
         </section>
       )}
 
-      {composerOpen && (
+      {filter !== "error" && composerOpen && (
         <form className="relationship-manual-form" onSubmit={submitManualProposal}>
           <header>
             <div>
@@ -321,7 +322,10 @@ export function BasementRelationshipProposals() {
       )}
 
       {state.status === "error" && <div className="basement-error" role="alert"><WarningCircle size={19} /><div><strong>没有读到关系提案</strong><p>{state.error}</p></div></div>}
-      {state.status !== "error" && state.status !== "loading" && proposals.length === 0 && (
+      {state.status !== "error" && state.status !== "loading" && filter === "error" && failedJobs.length === 0 && (
+        <div className="basement-empty-state"><WarningCircle size={22} weight="light" /><span>没有未完成的关联任务</span></div>
+      )}
+      {state.status !== "error" && state.status !== "loading" && filter !== "error" && proposals.length === 0 && (
         <div className="basement-empty-state"><LinkSimple size={22} weight="light" /><span>这里没有{statusLabels[filter]}提案</span><p>模型找到候选也不会直接改关系图；只有明确审核后才会落边。</p></div>
       )}
 
@@ -384,7 +388,7 @@ export function BasementRelationshipProposals() {
         })}
       </div>
 
-      <section className="relationship-history" aria-labelledby="relationship-history-title">
+      {filter !== "error" && <section className="relationship-history" aria-labelledby="relationship-history-title">
         <header>
           <div><span className="basement-kicker">可撤回，也留痕</span><h3 id="relationship-history-title">正式关系与历史</h3></div>
           <strong>{edges.filter((edge) => edge.active).length} 条正在使用 · {edges.length} 条历史</strong>
@@ -411,7 +415,7 @@ export function BasementRelationshipProposals() {
             ))}
           </div>
         ) : <div className="basement-empty-state"><LinkSimple size={22} weight="light" /><span>还没有正式关系历史</span></div>}
-      </section>
+      </section>}
 
       {scenePreview && (
         <div className="basement-scene-preview__veil" role="presentation" onMouseDown={(event) => {

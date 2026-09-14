@@ -75,6 +75,9 @@ def test_scene_failure_blocks_restart_but_new_content_can_run(live,failure):
     assert all(call.args[0]!=source for call in restarted.link_scene.await_args_list)
     failures=scene_job_failures(settings)
     assert len(failures)==1 and failures[0]['scene_id']==source
+    error_view=client.get('/api/scene-edge-proposals?status=error').json()
+    assert error_view['count']==1 and error_view['proposals']==[]
+    assert error_view['failed_jobs'][0]['scene_id']==source
     if failure=='contract':
         assert failures[0]['attempts'][0]['status']=='invalid_json_contract'
         assert '格式' in failures[0]['error']

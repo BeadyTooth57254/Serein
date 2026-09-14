@@ -342,6 +342,7 @@
   "tests/test_resume_shadows.py",
   "tests/test_routing.py",
   "tests/test_scene_import.py",
+  "tests/test_scene_linker_diagnostics.py",
   "tests/test_scene_references.py",
   "tests/test_scene_snapshot.py",
   "tests/test_search.py",

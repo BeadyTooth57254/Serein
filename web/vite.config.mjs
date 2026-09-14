@@ -1800,7 +1800,7 @@ function sereinMemoryBridge() {
         }
         try {
           const body = await readJsonBody(request);
-          const allowedStatuses = ["pending", "accepted", "rejected", "superseded", "all"];
+          const allowedStatuses = ["pending", "accepted", "rejected", "superseded", "error", "all"];
           const status = allowedStatuses.includes(body.status) ? body.status : "pending";
           const limit = Math.max(1, Math.min(Number(body.limit) || 30, 100));
           const query = new URLSearchParams({ status, limit: String(limit), include_context: "true" });

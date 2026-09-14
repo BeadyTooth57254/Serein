@@ -2569,10 +2569,25 @@ class SceneLinker:
             timeout=self.timeout_seconds,
         )
         try:
-            raw = response.choices[0].message.content if response.choices else ""
+            choice = response.choices[0] if response.choices else None
+            raw = choice.message.content if choice else ""
+            finish_reason = choice.finish_reason if choice else None
         except (AttributeError, IndexError, TypeError):
             raw = ""
-        return _parse_json_object(str(raw or ""))
+            finish_reason = None
+        raw = str(raw or "")
+        parsed = _parse_json_object(raw)
+        if parsed is None or not isinstance(parsed.get("edges"), list):
+            problem = ("empty" if not raw.strip() else "not_json_object" if parsed is None
+                       else "missing_edges" if "edges" not in parsed else "edges_not_list")
+            logger.warning("Scene relation model format failure: model=%s scene_id=%s reason=%s "
+                           "finish_reason=%s content_chars=%d",
+                           provider["name"], payload.get("new_scene", {}).get("scene_id", ""),
+                           problem, str(finish_reason or "unknown")[:40], len(raw))
+            if _environment_value("SEREIN_SCENE_LINKER_LOG_INVALID_RESPONSE") == "1":
+                logger.warning("Scene relation invalid model response (debug enabled; first 2000 chars): %r",
+                               raw[:2000])
+        return parsed
 
     def _normalize_edges(
         self,
