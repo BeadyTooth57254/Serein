@@ -51,7 +51,10 @@ def snapshot(deploy):
                 path=deploy/name
                 if not path.exists():continue
                 # Backups may contain credentials; keep the archive private.
-                archive.add(path,arcname=name,recursive=True)
+                # The running installer holds this lock on Windows; it is
+                # process coordination, not persistent instance state.
+                archive.add(path,arcname=name,recursive=True,
+                            filter=lambda item: None if item.name == 'runtime/installer.lock' else item)
         pending.chmod(0o600);pending.replace(target)
     except BaseException:
         pending.unlink(missing_ok=True);raise

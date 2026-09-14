@@ -469,5 +469,8 @@
   "web/tests/public.test.mjs",
   "web/tests/together-date.test.mjs",
   "web/tests/webAuth.test.mjs",
-  "web/vite.config.mjs"
+  "web/vite.config.mjs",
+  "release-version.json",
+  "scripts/upstream_update.py",
+  "tests/test_upstream_update.py"
 ]

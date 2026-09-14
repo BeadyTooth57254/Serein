@@ -23,6 +23,38 @@ powershell -ExecutionPolicy Bypass -File .\scripts\one_click.ps1
 管理菜单需要宿主机 Python 3.9+；直跑需要 Python 3.11+。Docker 路线的服务运行时由镜像提供。
 页面账号可以先设置，执行部署等操作时才选择并检查运行环境。
 
+## 自动拉取上游更新
+
+进入当前实例的发行目录运行 `se`，选择 **11 · 检查上游更新并安装**。Bash、PowerShell 和 Python 入口共用这个菜单，支持 Docker 与 Python＋Node 直跑。菜单 1「部署 Serein（本地源码）」保留首装、迁移和重新构建本地文件的用途。
+
+菜单 11 先显示本地与上游版本，选择“先备份再更新”（默认）或“跳过数据备份直接更新”；也可以返回取消。随后从 `Yinglianchun/Serein` 的最新已发布 Release 下载 `serein-public-版本.zip` 及 `.sha256`，核对摘要、版本和发行清单，通过后才停服务。上游尚未发布新版、网络失败或包不完整时不会停服。相同版本不重复构建；上次更新中断或失败时可重试。
+
+更新只替换发行清单里的源码，清理上一版清单中已移除的文件。保留 `deploy/runtime`、`deploy/secrets`、`deploy/config.toml`、`deploy/.env`、`deploy/installation.json` 和其他用户文件。新文件与自建文件重名、目标是链接、Git 有未提交改动或上次更新后的发行源码被手工改过时停止，先处理本地修改再更新。
+
+源码始终备份到 `deploy/backups/source-*.zip`；选择数据备份时，还会在服务停止后生成现有的完整实例备份。源码替换遇到错误会尝试恢复旧文件；构建失败会保留停止状态和备份，启动失败会尝试停止新服务。此时不要手动启动混合版本，可修复错误后重试菜单 11，或使用更新前源码和对应数据备份明确恢复。源码备份不在菜单 9 的数据备份自动清理范围内。
+
+更新成功后记录 `deploy/update-state.json` 并退出旧菜单；重新输入 `se` 即可使用新版菜单。更新器依据发行包和校验值，不执行 `git pull`、不依赖旧提交和标签，不受公开历史重写影响。若运行在 Git checkout 中，它只更新发行源码，不移动本地分支；开发用途请另用工作区，不要把安装目录的旧 Git 历史重新推送。
+
+**首次接入：** rc64 及更早版本没有菜单 11。进入原来的 Serein 安装目录，确认这里有 `deploy/config.toml` 和 `scripts/manage.py`，再运行一次下面的引导；脚本会下载正式发行包、校验、备份并在原位置升级，不用重新克隆或重新转换记忆。完成后，以后的更新直接用 `se` → 11。
+
+Linux / Termux（`curl` 失败时不会执行后续脚本）：
+
+```sh
+curl -fL https://raw.githubusercontent.com/Yinglianchun/Serein/main/scripts/upstream_update.py -o /tmp/serein-upstream-update.py && python3 /tmp/serein-upstream-update.py --root "$PWD"
+```
+
+Termux 若没有 `/tmp` 写权限，将上面的两个 `/tmp/` 都替换为 `$TMPDIR/`。Windows PowerShell：
+
+```powershell
+$updater = Join-Path $env:TEMP 'serein-upstream-update.py'
+Invoke-WebRequest https://raw.githubusercontent.com/Yinglianchun/Serein/main/scripts/upstream_update.py -OutFile $updater -ErrorAction Stop
+python $updater --root (Get-Location).Path
+```
+
+**Git 历史清理与现有数据：** 清理公开提交、标签不会触碰本机或服务器的数据库，也不会重建或删除正在运行的容器。更新到新版代码才需要重新构建容器，由上述脚本完成；原数据库、模型配置、Key 和向量继续沿用，不重新导入旧库。不要删除原安装目录或执行清空数据的命令来“配合”历史清理。
+
+开发者若需要重新克隆，建议放在另一个开发目录，现有实例继续在原路径运行。不要直接在空的新克隆中重新部署来代替旧实例：它缺少 `deploy/runtime`、`secrets`、`config.toml`、`.env` 和 `installation.json`，会使用另一份状态。后者还保存 Compose 项目名；仅带数据库去新目录不等于保留完整实例。安装用户优先使用原位置引导升级，无须迁移这些文件。
+
 ## 升级后的检索校验
 
 rc52 修复了早期升级把“有后台任务配置”误当成“必须启用 Live Policy”的问题。只有身份、Scene Linker 的 `scene-linker-background.yaml` 不需要补 `gateway` 配置。没有正式发布记录时，普通聊天直接使用已经准备好的 `model-indexes/.../routes.json`；不重新调用 embedding，不改正文数据库，也不凭向量顺序伪造新版 source/index。网页保存的 domain 选择继续生效。

@@ -21,4 +21,5 @@ docs/paper/pdf/reading-edition-build.json
 deploy/secrets/
 deploy/venv/
 deploy/installation.json
+deploy/update-state.json
 deploy/connection-guide.txt

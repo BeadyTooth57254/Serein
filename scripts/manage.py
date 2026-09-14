@@ -583,13 +583,17 @@ def main():
         try:
             print(f'\n安装目录：{ROOT}\n实例数据：{DEPLOY / "runtime"}')
             choice=choose('Serein · 安装与维护',[
-                ('0','设置前端用户名／密码'),('1','部署 Serein'),('2','重启服务'),('3','向量重建与清理'),('4','启动／停止／状态／日志'),('5','访问入口：本机／局域网／公网'),('6','更换 Gateway Key'),('7','网页旧库目录只读授权'),('8','旧边转换补救（早期版本未转换成功）'),('9','旧备份清理'),('10','历史数据补漏（梦境／窗影／日记／暗房）'),('q','退出')])
+                ('0','设置前端用户名／密码'),('1','部署 Serein（本地源码）'),('2','重启服务'),('3','向量重建与清理'),('4','启动／停止／状态／日志'),('5','访问入口：本机／局域网／公网'),('6','更换 Gateway Key'),('7','网页旧库目录只读授权'),('8','旧边转换补救（早期版本未转换成功）'),('9','旧备份清理'),('10','历史数据补漏（梦境／窗影／日记／暗房）'),('11','检查上游更新并安装'),('q','退出')])
             if choice=='q':return
             spec=importlib.util.spec_from_file_location('installer_lock',ROOT/'src'/'serein'/'file_lock.py')
             locks=importlib.util.module_from_spec(spec);spec.loader.exec_module(locks)
             with locks.exclusive_lock(DEPLOY/'runtime'/'installer.lock'):
                 if choice=='0':auth()
                 elif choice=='9':cleanup_backups()
+                elif choice=='11':
+                    spec=importlib.util.spec_from_file_location('upstream_update',ROOT/'scripts'/'upstream_update.py')
+                    helper=importlib.util.module_from_spec(spec);spec.loader.exec_module(helper)
+                    if helper.run_update(sys.modules[__name__]):return
                 else:
                     if select_environment() is False:continue
                     ensure_tools()
