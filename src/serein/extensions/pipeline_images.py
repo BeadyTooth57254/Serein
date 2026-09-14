@@ -1,0 +1,125 @@
+"""Bound public attachments: freeze bytes, verify receipts, and bind transcriptions."""
+import base64
+import hashlib
+import ipaddress
+import socket
+import json
+import re
+import http.client
+import ssl
+from urllib.parse import urlsplit
+
+MAX_IMAGE_BYTES = 10 * 1024 * 1024
+MAX_TOTAL_BYTES = 40 * 1024 * 1024
+
+
+def image_bytes(url):
+    if url.startswith('data:image/'):
+        header, encoded = url.split(',', 1)
+        if not header.endswith(';base64') or len(encoded) > MAX_IMAGE_BYTES * 4 // 3 + 4:
+            raise ValueError('图片编码无效或超过 10 MB')
+        body = base64.b64decode(encoded, validate=True)
+    else:
+        parsed = urlsplit(url)
+        if parsed.scheme not in ('https', 'http') or not parsed.hostname or parsed.username or parsed.password:
+            raise ValueError('图片地址无效')
+        addresses = socket.getaddrinfo(parsed.hostname, parsed.port or (443 if parsed.scheme == 'https' else 80))
+        if not addresses or any(not ipaddress.ip_address(item[4][0]).is_global for item in addresses):
+            raise ValueError('附件地址必须是公开图片地址或直接上传的图片数据')
+        # Connect to the checked address, retaining hostname for Host and TLS.
+        # A second DNS resolution must not turn a public attachment into an internal request.
+        connection=http.client.HTTPConnection(parsed.hostname,parsed.port or (443 if parsed.scheme=='https' else 80),timeout=20)
+        try:
+            connection.sock=socket.create_connection((addresses[0][4][0],connection.port),timeout=20)
+            if parsed.scheme=='https':
+                connection.sock=ssl.create_default_context().wrap_socket(connection.sock,server_hostname=parsed.hostname)
+            connection.request('GET',(parsed.path or '/')+('?' + parsed.query if parsed.query else ''))
+            response=connection.getresponse()
+            if response.status!=200:raise ValueError(f'读取原图失败（HTTP {response.status}）')
+            body = bytearray()
+            while chunk:=response.read(65536):
+                body.extend(chunk)
+                if len(body) > MAX_IMAGE_BYTES:
+                    raise ValueError('图片超过 10 MB')
+            body = bytes(body)
+        finally:connection.close()
+    if not body or len(body) > MAX_IMAGE_BYTES:
+        raise ValueError('图片为空或超过 10 MB')
+    if body.startswith(b'\x89PNG\r\n\x1a\n'): mime = 'image/png'
+    elif body.startswith(b'\xff\xd8\xff'): mime = 'image/jpeg'
+    elif body.startswith((b'GIF87a', b'GIF89a')): mime = 'image/gif'
+    elif body.startswith(b'RIFF') and body[8:12] == b'WEBP': mime = 'image/webp'
+    else: raise ValueError('附件不是可读取的 PNG、JPEG、GIF 或 WebP 原图')
+    return body, mime
+
+
+def freeze_images(images, previous=()):
+    cache = {(item['source_message_id'], item['position'], item['original_url']): item for item in previous}
+    result = []; total = 0
+    for image in images:
+        key = (image['source_message_id'], image['position'], image['url'])
+        old = cache.get(key)
+        body, mime = image_bytes(old['url'] if old else image['url'])
+        sha = hashlib.sha256(body).hexdigest()
+        if old and old['sha256'] != sha:
+            raise ValueError('冻结图片摘要不匹配，请重新领取任务')
+        total += len(body)
+        if len(result) >= 24 or total > MAX_TOTAL_BYTES:
+            raise ValueError('本批图片超过 24 张或 40 MB，请减小输入批次')
+        result.append({**image, 'original_url': image['url'], 'sha256': sha,
+                       'url': 'data:' + mime + ';base64,' + base64.b64encode(body).decode()})
+    return result
+
+
+def verify_images(images):
+    for item in images:
+        if not item['url'].startswith('data:image/'):
+            raise ValueError('模型输入必须使用已冻结的原图')
+        body, _ = image_bytes(item['url'])
+        if hashlib.sha256(body).hexdigest() != item['sha256']:
+            raise ValueError('冻结图片摘要不匹配')
+
+
+def bind_transcriptions(output, images):
+    rows = output.get('image_transcriptions', [])
+    if not isinstance(rows, list) or len(rows) != len(images):
+        raise ValueError('每张输入图片必须恰有一份 image_transcriptions 转录')
+    bound = {}; verify_images(images)
+    for row in rows:
+        if not isinstance(row, dict) or set(row) != {'input_image', 'text', 'unreadable'}:
+            raise ValueError('图片转录字段无效；出处由 host 绑定')
+        index = row['input_image']
+        if type(index) is not int or not 1 <= index <= len(images) or index in bound:
+            raise ValueError('图片转录序号重复或超出输入范围')
+        if not isinstance(row['text'], str) or len(row['text']) > 40000 or type(row['unreadable']) is not bool:
+            raise ValueError('图片转录文字或 unreadable 类型无效')
+        if not row['text'].strip() and not row['unreadable']:
+            raise ValueError('空白转录必须标记 unreadable')
+        image = images[index - 1]
+        bound[index] = {**{key: image[key] for key in ('source_message_id', 'position', 'sha256', 'evidence_role')},
+                        'text': row['text'], 'unreadable': row['unreadable']}
+    return [bound[index] for index in sorted(bound)]
+
+
+def decision(output):
+    return {key: value for key, value in output.items() if key != 'image_transcriptions'}
+
+
+def expire_completed_media(store):
+    """Only disposable task copies expire. Canonical raw attachments remain intact."""
+    def strip(value,key=''):
+        if key in ('image_transcriptions','curator_image_transcriptions'):return value
+        if isinstance(value,dict):return {k:strip(v,k) for k,v in value.items()}
+        if isinstance(value,list):return [strip(v,key) for v in value]
+        if isinstance(value,str):
+            if key=='content_base64':return '[expired task image]'
+            return re.sub(r'data:image/[^;\s]+;base64,[A-Za-z0-9+/=]+','[expired task image]',value)
+        return value
+    rows=store.conn.execute("SELECT id,input_json,result_json FROM pipeline_batches WHERE status='done' AND json_extract(result_json,'$.media_cache_expired') IS NULL AND datetime(json_extract(result_json,'$.completed_at'))<datetime('now','-7 days')").fetchall()
+    for row in rows:
+        result=json.loads(row['result_json']);result['media_cache_expired']=True
+        store.conn.execute('UPDATE pipeline_batches SET input_json=?,result_json=? WHERE id=?',
+            (json.dumps(strip(json.loads(row['input_json'])),ensure_ascii=False),json.dumps(result),row['id']))
+        for job in store.conn.execute('SELECT id,request_json FROM pipeline_jobs WHERE batch_id=?',(row['id'],)).fetchall():
+            store.conn.execute('UPDATE pipeline_jobs SET request_json=? WHERE id=?',
+                (json.dumps(strip(json.loads(job['request_json'])),ensure_ascii=False),job['id']))

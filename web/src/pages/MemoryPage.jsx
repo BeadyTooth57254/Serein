@@ -1,0 +1,1699 @@
+import { identityName, instanceSettings } from "../storage/instanceStore.js";
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  Archive,
+  ArrowCounterClockwise,
+  BookOpenText,
+  CalendarBlank,
+  CaretRight,
+  ChatCircleText,
+  Check,
+  CheckSquare,
+  Heart,
+  LinkSimple,
+  ListBullets,
+  MagnifyingGlass,
+  PencilSimple,
+  Plus,
+  ShareNetwork,
+  Square,
+  Sparkle,
+  Trash,
+  X,
+} from "@phosphor-icons/react";
+import { createUuid } from "../utils/createUuid.js";
+import { defaultAnnotationIdentity } from "../data/memory.js";
+import { savePersonal, loadPersonalScope } from "../storage/personalStore.js";
+import { canonicalDomainPolicies } from "../data/basement.js";
+import {
+  loadMemorySnapshot,
+  readMemoryScenes,
+  storeMemoryScenes,
+  tombstoneMemoryScenes,
+} from "../storage/memoryStore.js";
+import { MarkdownProjection } from "../components/MarkdownProjection.jsx";
+import { SceneCueEditor } from "../components/SceneCueEditor.jsx";
+import { SceneEvidenceEditor } from "../components/SceneEvidenceEditor.jsx";
+import { compareFactEventsByEnd, factEventTimeLabel } from "../utils/factEventTime.js";
+import { applyEventBatch, runEventBatch } from "../utils/eventBatch.js";
+
+const relationLabels = {
+  continues: {
+    outgoing: "后来继续",
+    incoming: "接着它发生",
+    symmetric: "继续展开",
+  },
+  echoes: {
+    outgoing: "彼此回响",
+    incoming: "彼此回响",
+    symmetric: "彼此回响",
+  },
+  resolves: {
+    outgoing: "后来落地",
+    incoming: "让它落地",
+    symmetric: "让它落地",
+  },
+  contrasts_with: {
+    outgoing: "形成对照",
+    incoming: "形成对照",
+    symmetric: "形成对照",
+  },
+  evidenced_by: {
+    outgoing: "被它印证",
+    incoming: "印证了它",
+    symmetric: "彼此印证",
+  },
+};
+
+function relatedScenesFor(scene) {
+  if (Array.isArray(scene.relatedScenes) && scene.relatedScenes.length) {
+    return scene.relatedScenes;
+  }
+  return (scene.relatedSceneIds ?? []).map((id) => ({ id, relations: [] }));
+}
+
+function relationLabel(relation) {
+  const labels = relationLabels[relation.type];
+  return labels?.[relation.direction] ?? labels?.symmetric ?? relation.type ?? "有关联";
+}
+
+function sereinSourceIdForScene(scene) {
+  if (scene?.sourceKind !== "serein-live-readonly") return "";
+  if (typeof scene.canonicalSceneId === "string" && scene.canonicalSceneId) {
+    return scene.canonicalSceneId;
+  }
+  const source = scene.sources?.find((candidate) => (
+    typeof candidate?.id === "string" && candidate.id.startsWith("manual_source:")
+  ));
+  return source ? source.id.slice("manual_source:".length) : "";
+}
+
+const memoryTypeLabels = { scene: "Scene", event: "事件", fact: "事实" };
+const factEventCacheKey = "serein.memory.fact-events.v2";
+const factEventCacheMaxAgeMs = 5 * 60 * 1000;
+let factEventListLoadInFlight = null;
+
+function factEventSummary(item) {
+  if (!item || typeof item !== "object") return null;
+  const { source_refs: _sourceRefs, ...summary } = item;
+  return summary.item_id ? summary : null;
+}
+
+function factEventSourceCount(item) {
+  if (Array.isArray(item?.source_refs)) return item.source_refs.length;
+  const count = Number(item?.source_count);
+  return Number.isFinite(count) && count >= 0 ? count : 0;
+}
+
+function readFactEventCache() {
+  try {
+    const payload = JSON.parse(window.localStorage.getItem(factEventCacheKey));
+    if (!payload || !Array.isArray(payload.fact) || !Array.isArray(payload.event)) return null;
+    return {
+      cachedAt: Number(payload.cachedAt) || 0,
+      items: {
+        fact: payload.fact.map(factEventSummary).filter(Boolean),
+        event: payload.event.map(factEventSummary).filter(Boolean),
+      },
+    };
+  } catch {
+    return null;
+  }
+}
+
+function storeFactEventCache(items) {
+  try {
+    window.localStorage.setItem(factEventCacheKey, JSON.stringify({
+      cachedAt: Date.now(),
+      fact: items.fact.map(factEventSummary).filter(Boolean),
+      event: items.event.map(factEventSummary).filter(Boolean),
+    }));
+  } catch {
+    // Live reads remain available when browser storage is full or disabled.
+  }
+}
+
+async function requestFactEvents({ type, status, query = "", includeSources = false, signal }) {
+  const items = [];
+  let offset = 0;
+  do {
+    const response = await fetch("/__serein/live/fact-events", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ type, status, query, includeSources, limit: 500, offset }),
+      signal,
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.message || payload.error || "读取失败");
+    const page = Array.isArray(payload.items) ? payload.items : [];
+    items.push(...page);
+    offset += page.length;
+    if (!page.length || offset >= Number(payload.count || 0)) break;
+  } while (true);
+  return items;
+}
+
+function loadFactEventLists() {
+  if (!factEventListLoadInFlight) {
+    factEventListLoadInFlight = Promise.all(["fact", "event"].map(async (type) => [
+      type,
+      (await Promise.all(["active", "archived"].map((status) => (
+        requestFactEvents({ type, status })
+      )))).flat(),
+    ]))
+      .then((entries) => Object.fromEntries(entries))
+      .finally(() => { factEventListLoadInFlight = null; });
+  }
+  return factEventListLoadInFlight;
+}
+
+function sceneExcerpt(body) {
+  const plain = String(body[0] || "").replace(/[*_`>#-]+/gu, "").replace(/\s+/gu, " ").trim();
+  return plain.length <= 108 ? plain : `${plain.slice(0, 107)}…`;
+}
+
+function sourceTimeLabel(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value || "").replace("T", " ").slice(0, 16);
+  return new Intl.DateTimeFormat("zh-CN", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(date).replaceAll("/", "-");
+}
+
+function FactEventDetail({ item, onClose, onRevised, onStatusChanged, onDeleted, onFavoriteChanged }) {
+  const [favorite,setFavorite] = useState(false);
+  const [favoriteReady,setFavoriteReady] = useState(false);
+  useEffect(()=>{let active=true;loadPersonalScope('favorite').then(rows=>{if(active){setFavorite(!!rows.find(row=>row.key===item.item_id)?.value.favorite);setFavoriteReady(true);}}).catch(()=>{});return()=>{active=false;};},[item.item_id]);
+  async function toggleFavorite() {
+    setFavoriteReady(false);
+    try {const row=await savePersonal('favorite',item.item_id,{favorite:!favorite},item.item_id);setFavorite(row.value.favorite);onFavoriteChanged(item.item_id,row.value.favorite);}
+    catch(error){setMessage(error.message);setState('error');}
+    finally{setFavoriteReady(true);}
+  }
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(() => ({
+    title: item.title || "",
+    body: item.body || "",
+  }));
+  const [state, setState] = useState("idle");
+  const [message, setMessage] = useState("");
+
+  const save = async () => {
+    if (!draft.body.trim() || (item.item_type === "event" && !draft.title.trim())) return;
+    setState("saving");
+    setMessage("");
+    try {
+      const response = await fetch("/__serein/memory/revise-fact-event", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          itemId: item.item_id,
+          ...(draft.title.trim() !== (item.title || "") ? { title: draft.title.trim() } : {}),
+          ...(draft.body.trim() !== item.body ? { body: draft.body.trim() } : {}),
+        }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || !payload.item) throw new Error(payload.message || payload.error || "保存失败");
+      onRevised(item.item_id, payload.item);
+      setEditing(false);
+      setState("saved");
+      setMessage(
+        payload.status === "superseded" && item.item_type === "event"
+          ? "已保存为新的修订版；请重新审核是否允许自动浮现"
+          : "已保存",
+      );
+    } catch (error) {
+      setState("error");
+      setMessage(error.message || "保存失败");
+    }
+  };
+
+  const setRecallable = async (value) => {
+    if (item.item_type !== "event") return;
+    setState("saving");
+    setMessage("");
+    try {
+      const response = await fetch("/__serein/memory/revise-fact-event", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ itemId: item.item_id, recallable: value }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || !payload.item) throw new Error(payload.message || payload.error || "保存失败");
+      onRevised(item.item_id, payload.item);
+      setState("saved");
+      setMessage(value === true ? "已允许自动浮现" : value === false ? "已关闭自动浮现" : "已设为未审核");
+    } catch (error) {
+      setState("error");
+      setMessage(error.message || "保存失败");
+    }
+  };
+
+  const setItemStatus = async (status) => {
+    setState("saving");
+    setMessage("");
+    try {
+      const response = await fetch("/__serein/memory/set-fact-event-status", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ itemId: item.item_id, status }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || !payload.item) throw new Error(payload.message || payload.error || "操作失败");
+      onStatusChanged(item.item_id, payload.item);
+    } catch (error) {
+      setState("error");
+      setMessage(error.message || "操作失败");
+    }
+  };
+
+  const deleteItem = async () => {
+    if (!window.confirm(`永久删除这条${memoryTypeLabels[item.item_type]}？它的历史修订和来源副本也会删除，且无法撤销。聊天宿主 原始聊天不受影响。`)) return;
+    setState("saving");
+    setMessage("");
+    try {
+      const response = await fetch("/__serein/memory/delete-fact-event", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ itemId: item.item_id }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || !Number(payload.deleted)) throw new Error(payload.message || payload.error || "永久删除失败");
+      onDeleted(payload.item_ids || [item.item_id], payload.item_type || item.item_type);
+    } catch (error) {
+      setState("error");
+      setMessage(error.message || "永久删除失败");
+    }
+  };
+  const timeLabel = factEventTimeLabel(item);
+
+  return (
+    <div className="scene-detail__content fact-event-detail" key={item.item_id}>
+      <button className="scene-detail__close" type="button" aria-label="关闭详情" onClick={onClose}>
+        <X size={24} weight="light" aria-hidden="true" />
+      </button>
+      <header className="scene-detail__header">
+        <div className="scene-detail__header-top">
+          <time dateTime={`${item.local_date}T${item.local_start_time}`}>{timeLabel}</time>
+          <div className="scene-detail__edit-actions">
+            {editing ? (
+              <>
+                <button type="button" onClick={() => setEditing(false)} disabled={state === "saving"}>取消</button>
+                <button className="is-primary" type="button" onClick={save} disabled={state === "saving"}>
+                  <Check size={14} weight="light" aria-hidden="true" />
+                  {state === "saving" ? "保存中…" : "保存修订"}
+                </button>
+              </>
+            ) : (
+              <>
+                {item.item_type==='event'&&<button type="button" aria-pressed={favorite} disabled={!favoriteReady} onClick={toggleFavorite}><Heart size={14} weight={favorite?'fill':'light'}/>{favorite?'已收藏':'收藏'}</button>}
+                <button type="button" onClick={() => setEditing(true)} disabled={state === "saving"}>
+                  <PencilSimple size={14} weight="light" aria-hidden="true" />编辑正文
+                </button>
+                <button type="button" onClick={() => setItemStatus(item.status === "archived" ? "active" : "archived")} disabled={state === "saving"}>
+                  {item.status === "archived"
+                    ? <><ArrowCounterClockwise size={14} weight="light" aria-hidden="true" />恢复</>
+                    : <><Archive size={14} weight="light" aria-hidden="true" />归档</>}
+                </button>
+                <button className="is-danger" type="button" onClick={deleteItem} disabled={state === "saving"}>
+                  <Trash size={14} weight="light" aria-hidden="true" />删除
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+        {editing && item.item_type === "event" ? (
+          <input className="scene-editor__title" value={draft.title} maxLength={160} onChange={(event) => setDraft({ ...draft, title: event.target.value })} />
+        ) : <h2>{item.title || item.body}</h2>}
+        <div className="scene-detail__meta">
+          <span>{memoryTypeLabels[item.item_type]}</span>
+          <span><LinkSimple size={15} weight="light" aria-hidden="true" />{factEventSourceCount(item)} 条原文</span>
+          {item.item_type === "event" ? (
+            <label className="fact-event-recallable">
+              自动浮现
+              <select
+                value={item.recallable == null ? "" : String(item.recallable)}
+                disabled={state === "saving"}
+                onChange={(event) => setRecallable(event.target.value === "" ? null : event.target.value === "true")}
+              >
+                <option value="">未审核</option>
+                <option value="true">允许</option>
+                <option value="false">关闭</option>
+              </select>
+            </label>
+          ) : <span>不参与普通召回</span>}
+          {item.status !== "active" ? <span>{item.status === "archived" ? "已归档" : "旧版本"}</span> : null}
+          {item.surface_state?.reasons?.includes("covered_by_scene") ? <span>原文已被 Scene 完整保存，当前不自动浮现</span> : null}
+        </div>
+        {message ? <p className={`fact-event-detail__message${state === "error" ? " is-error" : ""}`} role={state === "error" ? "alert" : "status"}>{message}</p> : null}
+      </header>
+      {editing ? (
+        <div className="scene-editor fact-event-editor">
+          <label>
+            <span>{item.item_type === "event" ? "经过" : "事实"}</span>
+            <textarea rows={item.item_type === "event" ? 9 : 4} maxLength={item.item_type === "event" ? 1600 : 500} value={draft.body} onChange={(event) => setDraft({ ...draft, body: event.target.value })} />
+          </label>
+          <p>修改正文会留下旧版本，并继续沿用已绑定的原文。</p>
+        </div>
+      ) : item.item_type === "event" ? (
+        <div className="scene-detail__body"><p>{item.body}</p></div>
+      ) : null}
+      <section className="fact-event-sources">
+        <header><h3>原文</h3><span>{item.source_refs?.length || 0}</span></header>
+        {(item.source_refs || []).map((source) => (
+          <article key={`${source.source_system}:${source.session_id}:${source.message_id}`}>
+            <div><strong>{identityName(source.role)}</strong><time>{sourceTimeLabel(source.created_at)}</time></div>
+            <p>{source.content || `原文 #${source.message_id}`}</p>
+          </article>
+        ))}
+      </section>
+    </div>
+  );
+}
+
+function SceneDomainEditor({ scene, onSaved }) {
+  const [domainOptions,setDomainOptions]=useState(canonicalDomainPolicies);
+  useEffect(()=>{let active=true;instanceSettings().then(config=>{if(active)setDomainOptions(config.tagging.domains);}).catch(()=>{});return()=>{active=false;};},[]);
+  const currentDomain = domainOptions.find((item) => item.key === scene.bucketDomain);
+  const sourceId = sereinSourceIdForScene(scene);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(scene.bucketDomain || "general");
+  const [state, setState] = useState("idle");
+  const [message, setMessage] = useState("");
+
+  const save = async (event) => {
+    event.preventDefault();
+    if (!sourceId || state === "saving") return;
+    const target = domainOptions.find((item) => item.key === draft);
+    if (!target) return;
+    if (!window.confirm(`把「${scene.title}」的主域改为「${target.label}」？\n\n这会写回线上 Serein。`)) return;
+
+    setState("saving");
+    setMessage("");
+    try {
+      const response = await fetch("/__serein/memory/edit-scene-domain", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sourceId, domain: draft }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.message || payload.error || "主域保存失败");
+      onSaved(draft);
+      setEditing(false);
+      setState("saved");
+      setMessage(payload.changed_count ? "已写回线上" : "线上已经是这个主域");
+    } catch (error) {
+      setState("error");
+      setMessage(error.message || "主域保存失败");
+    }
+  };
+
+  return (
+    <div className={`scene-domain${state === "error" ? " is-error" : ""}`}>
+      <span className="scene-domain__label">主域</span>
+      {editing ? (
+        <form onSubmit={save}>
+          <select value={draft} onChange={(event) => setDraft(event.target.value)} disabled={state === "saving"}>
+            {!domainOptions.some(item=>item.key===draft) && <option value={draft}>{draft || "未标记"}</option>}
+            {domainOptions.map((domain) => (
+              <option value={domain.key} key={domain.key}>{domain.label}</option>
+            ))}
+          </select>
+          <button type="button" onClick={() => {
+            setDraft(scene.bucketDomain || "general");
+            setEditing(false);
+            setState("idle");
+            setMessage("");
+          }} disabled={state === "saving"}>取消</button>
+          <button className="is-primary" type="submit" disabled={state === "saving" || draft === scene.bucketDomain}>
+            {state === "saving" ? "写入中…" : "保存"}
+          </button>
+        </form>
+      ) : (
+        <>
+          <strong>{currentDomain?.label || scene.bucketDomain || "未标记"}</strong>
+          {sourceId ? (
+            <button type="button" onClick={() => {
+              setDraft(scene.bucketDomain || "general");
+              setEditing(true);
+              setState("idle");
+              setMessage("");
+            }}>
+              <PencilSimple size={13} weight="light" aria-hidden="true" />
+              修改
+            </button>
+          ) : <small>只读投影</small>}
+        </>
+      )}
+      {message ? <small role={state === "error" ? "alert" : "status"}>{message}</small> : null}
+    </div>
+  );
+}
+
+export function MemoryPage() {
+  const [exporting,setExporting]=useState(false);
+  async function exportMemories() {
+    setExporting(true);
+    try {
+      const response=await fetch("/__serein/export/markdown");
+      if(!response.ok)throw new Error("export_failed");
+      const url=URL.createObjectURL(await response.blob());
+      const link=document.createElement("a");link.href=url;link.download="serein-memories.zip";link.click();
+      setTimeout(()=>URL.revokeObjectURL(url),1000);
+    } catch {setSceneActionState("error");setSceneActionMessage("导出失败，请稍后重试。");}
+    finally{setExporting(false);}
+  }
+  async function removeRelatedScene(record) {
+    setSceneActionState("saving");
+    try {
+      for(const relation of record.relations || []) {
+        const response=await fetch("/__serein/memory/delete-scene-edge",{method:"POST",headers:{"Content-Type":"application/json"},
+          body:JSON.stringify({edgeId:relation.edgeId,sceneId:sereinSourceIdForScene(selectedScene)})});
+        if(!response.ok)throw new Error("unlink_failed");
+      }
+      const updated=sceneRecords.map(scene=>{
+        const remove=scene.id===selectedScene.id?record.id:scene.id===record.id?selectedScene.id:null;
+        if(!remove)return scene;
+        const related=relatedScenesFor(scene).filter(item=>item.id!==remove);
+        return {...scene,relatedScenes:related,relatedSceneIds:related.map(item=>item.id),relationCount:related.length};
+      });
+      setSceneRecords(updated);storeMemoryScenes(updated);setSceneActionState("success");setSceneActionMessage("已移除关联，记忆正文保留。");
+    } catch {setSceneActionState("error");setSceneActionMessage("关联未完整移除，请刷新后重试。");}
+  }
+  const initialFactEventCache = useMemo(readFactEventCache, []);
+  const [sceneRecords, setSceneRecords] = useState(readMemoryScenes);
+  const [memoryType, setMemoryType] = useState("scene");
+  const [favoriteIds,setFavoriteIds]=useState(()=>new Set());
+  const [favoriteLoadState,setFavoriteLoadState]=useState('loading');
+  const [favoriteError,setFavoriteError]=useState('');
+  const acceptFavorite=(id,favorite)=>setFavoriteIds(current=>{
+    const next=new Set(current);if(favorite)next.add(id);else next.delete(id);return next;
+  });
+  const [factEvents, setFactEvents] = useState(initialFactEventCache?.items || { fact: [], event: [] });
+  const [factEventDetails, setFactEventDetails] = useState({});
+  const [factEventLoadState, setFactEventLoadState] = useState(initialFactEventCache ? "ready" : "loading");
+  const [factEventError, setFactEventError] = useState("");
+  const [factEventSearch, setFactEventSearch] = useState({
+    type: "",
+    query: "",
+    items: [],
+    state: "idle",
+    error: "",
+  });
+  const [query, setQuery] = useState("");
+  const [view, setView] = useState("all");
+  const [selectedSceneId, setSelectedSceneId] = useState(null);
+  const [selectedFactEventId, setSelectedFactEventId] = useState(null);
+  const [editingSceneId, setEditingSceneId] = useState(null);
+  const [editDraft, setEditDraft] = useState(null);
+  const [annotationDraft, setAnnotationDraft] = useState("");
+  const [annotationComposerOpen, setAnnotationComposerOpen] = useState(false);
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedSceneIds, setSelectedSceneIds] = useState(() => new Set());
+  const [selectedEventIds, setSelectedEventIds] = useState(() => new Set());
+  const [eventAction, setEventAction] = useState({ busy: false, error: false, message: "" });
+  const eventBatchRunning = useRef(false);
+  const [deleteConfirmationOpen, setDeleteConfirmationOpen] = useState(false);
+  const [sceneActionState, setSceneActionState] = useState("idle");
+  const [sceneActionMessage, setSceneActionMessage] = useState("");
+  const [pendingSourceSceneId, setPendingSourceSceneId] = useState(() => (
+    window.localStorage.getItem("serein.memory.open-source-id") || ""
+  ));
+  const detailRef = useRef(null);
+
+  useEffect(() => {
+    setSelectedEventIds(new Set());
+    setEventAction({ busy: false, error: false, message: "" });
+  }, [memoryType, query, view]);
+
+  useEffect(()=>{
+    let active=true;
+    const refresh=async()=>{
+      if(document.visibilityState==='hidden')return;
+      try {
+        const rows=await loadPersonalScope('favorite');
+        if(active){setFavoriteIds(new Set(rows.filter(row=>row.value.favorite).map(row=>row.document_id)));setFavoriteLoadState('ready');setFavoriteError('');}
+      }catch(error){if(active){setFavoriteLoadState('error');setFavoriteError(error.message);}}
+    };
+    refresh();document.addEventListener('visibilitychange',refresh);window.addEventListener('focus',refresh);
+    return()=>{active=false;document.removeEventListener('visibilitychange',refresh);window.removeEventListener('focus',refresh);};
+  },[memoryType]);
+
+  useEffect(() => {
+    storeMemoryScenes(sceneRecords);
+  }, [sceneRecords]);
+
+  useEffect(() => {
+    let cancelled = false;
+    loadMemorySnapshot().then((snapshotScenes) => {
+      if (cancelled || !snapshotScenes?.length) return;
+      setSceneRecords(snapshotScenes);
+      setSelectedSceneId(null);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    const normalizedQuery = query.trim();
+    if (memoryType === "scene" || !normalizedQuery) {
+      setFactEventSearch({ type: "", query: "", items: [], state: "idle", error: "" });
+      return undefined;
+    }
+
+    const controller = new AbortController();
+    const timer = window.setTimeout(async () => {
+      setFactEventSearch({ type: memoryType, query: normalizedQuery, items: [], state: "loading", error: "" });
+      try {
+        const items = (await Promise.all((view === 'favorite' ? ['active','archived'] : [view === 'archived' ? 'archived' : 'active']).map(status=>requestFactEvents({
+          type: memoryType,
+          status,
+          query: normalizedQuery,
+          signal: controller.signal,
+        })))).flat();
+        setFactEventSearch({
+          type: memoryType,
+          query: normalizedQuery,
+          items,
+          state: "ready",
+          error: "",
+        });
+      } catch (error) {
+        if (error.name === "AbortError") return;
+        setFactEventSearch({
+          type: memoryType,
+          query: normalizedQuery,
+          items: [],
+          state: "error",
+          error: error.message || "暂时没有完成正文搜索。",
+        });
+      }
+    }, 180);
+
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [memoryType, query, view]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      const cacheIsFresh = initialFactEventCache
+        && Date.now() - initialFactEventCache.cachedAt < factEventCacheMaxAgeMs;
+      if (cacheIsFresh) return;
+      if (!initialFactEventCache) setFactEventLoadState("loading");
+      setFactEventError("");
+      try {
+        const nextItems = await loadFactEventLists();
+        if (!cancelled) {
+          setFactEvents(nextItems);
+          storeFactEventCache(nextItems);
+          setFactEventLoadState("ready");
+        }
+      } catch (error) {
+        if (!cancelled) {
+          if (!initialFactEventCache) setFactEventLoadState("error");
+          else setFactEventLoadState("ready");
+          setFactEventError(initialFactEventCache ? "" : (error.message || "暂时没有读到事实和事件。"));
+        }
+      }
+    };
+    load();
+    return () => { cancelled = true; };
+  }, [initialFactEventCache]);
+
+  useEffect(() => {
+    const openFromRecall = (event) => {
+      const sourceId = String(event.detail?.sourceId || "").trim();
+      if (sourceId) setPendingSourceSceneId(sourceId);
+    };
+    window.addEventListener("serein:open-memory-scene", openFromRecall);
+    return () => window.removeEventListener("serein:open-memory-scene", openFromRecall);
+  }, []);
+
+  useEffect(() => {
+    if (!pendingSourceSceneId) return;
+    const matchingScene = sceneRecords.find((scene) => (
+      scene.sources?.some((source) => source.id === `manual_source:${pendingSourceSceneId}`)
+    ));
+    if (!matchingScene) return;
+    setSelectedSceneId(matchingScene.id);
+    setPendingSourceSceneId("");
+    window.localStorage.removeItem("serein.memory.open-source-id");
+  }, [pendingSourceSceneId, sceneRecords]);
+
+  const filteredScenes = useMemo(() => {
+    const normalizedQuery = query.trim().toLocaleLowerCase("zh-CN");
+    return sceneRecords.filter((scene) => {
+      const matchesView = view === "all"
+        || (view === "favorite" && scene.favorite)
+        || (view === "sunken" && scene.status === "已沉底")
+        || (view === "emergent" && scene.status === "可浮现");
+      const haystack = [
+        scene.title,
+        scene.excerpt,
+        ...scene.body,
+        ...scene.annotations.map((annotation) => `${annotation.author} ${annotation.content}`),
+      ].join(" ").toLocaleLowerCase("zh-CN");
+      return matchesView && (!normalizedQuery || haystack.includes(normalizedQuery));
+    });
+  }, [
+    query,
+    sceneRecords,
+    view,
+  ]);
+
+  const activeFactEvents = useMemo(() => {
+    if (memoryType === "scene") return [];
+    const normalizedQuery = query.trim().toLocaleLowerCase("zh-CN");
+    const searchIsCurrent = normalizedQuery
+      && factEventSearch.type === memoryType
+      && factEventSearch.query.toLocaleLowerCase("zh-CN") === normalizedQuery;
+    const candidates = searchIsCurrent ? factEventSearch.items : (normalizedQuery ? [] : factEvents[memoryType] || []);
+    return candidates.filter((item) => {
+      const matchesView = view === 'favorite' ? favoriteIds.has(item.item_id) && ['active','archived'].includes(item.status)
+        : view === "archived" ? item.status === "archived" : item.status === "active";
+      const haystack = `${item.title || ""} ${item.body || ""}`.toLocaleLowerCase("zh-CN");
+      return matchesView && (!normalizedQuery || haystack.includes(normalizedQuery));
+    }).sort(compareFactEventsByEnd);
+  }, [factEventSearch, factEvents, memoryType, query, view, favoriteIds]);
+  const factEventSearchIsCurrent = memoryType !== "scene"
+    && Boolean(query.trim())
+    && factEventSearch.type === memoryType
+    && factEventSearch.query.toLocaleLowerCase("zh-CN") === query.trim().toLocaleLowerCase("zh-CN");
+  const factEventSearching = memoryType !== "scene"
+    && Boolean(query.trim())
+    && (!factEventSearchIsCurrent || factEventSearch.state === "loading");
+  const factEventSearchError = factEventSearchIsCurrent && factEventSearch.state === "error"
+    ? factEventSearch.error
+    : "";
+  const factEventLoading = (view==='favorite' && favoriteLoadState==='loading') || (query.trim() ? factEventSearching : factEventLoadState === "loading");
+  const factEventDisplayError = view==='favorite' && favoriteError ? favoriteError : query.trim()
+    ? factEventSearchError
+    : (factEventLoadState === "error" ? factEventError : "");
+
+  const selectedScene = sceneRecords.find((scene) => scene.id === selectedSceneId) ?? null;
+  const selectedFactEvent = memoryType === "scene"
+    ? null
+    : factEventDetails[selectedFactEventId]
+      || activeFactEvents.find((item) => item.item_id === selectedFactEventId)
+      || (factEvents[memoryType] || []).find((item) => item.item_id === selectedFactEventId)
+      || null;
+  const selectedSceneCount = selectedSceneIds.size;
+  const allFilteredScenesSelected = Boolean(filteredScenes.length)
+    && filteredScenes.every((scene) => selectedSceneIds.has(scene.id));
+
+  useEffect(() => {
+    if (!selectedScene) return undefined;
+    const closeOnEscape = (event) => {
+      if (event.key === "Escape") setSelectedSceneId(null);
+    };
+    document.addEventListener("keydown", closeOnEscape);
+    return () => document.removeEventListener("keydown", closeOnEscape);
+  }, [selectedScene]);
+
+  useEffect(() => {
+    if (!deleteConfirmationOpen) return undefined;
+    const closeOnEscape = (event) => {
+      if (event.key === "Escape") setDeleteConfirmationOpen(false);
+    };
+    document.addEventListener("keydown", closeOnEscape);
+    return () => document.removeEventListener("keydown", closeOnEscape);
+  }, [deleteConfirmationOpen]);
+
+  useEffect(() => {
+    setEditingSceneId(null);
+    setEditDraft(null);
+    setAnnotationDraft("");
+    setAnnotationComposerOpen(false);
+    detailRef.current?.scrollTo({ top: 0, behavior: "smooth" });
+  }, [selectedSceneId]);
+
+  const updateScene = (sceneId, update) => {
+    setSceneRecords((current) => current.map((scene) => (
+      scene.id === sceneId ? { ...scene, ...update(scene) } : scene
+    )));
+  };
+
+  const toggleFavorite = async (sceneId) => {
+    const scene = sceneRecords.find(item => item.id === sceneId);
+    try {
+      const saved = await savePersonal("favorite", sereinSourceIdForScene(scene), { favorite: !scene.favorite }, sereinSourceIdForScene(scene));
+      updateScene(sceneId, () => ({ favorite: saved.value.favorite }));
+      setSceneActionMessage("");
+    } catch (error) { setSceneActionMessage(error.message); setSceneActionState("error"); }
+  };
+
+  const enterSelectionMode = () => {
+    setSelectedSceneId(null);
+    setSelectedFactEventId(null);
+    setSelectionMode(true);
+  };
+
+  const exitSelectionMode = () => {
+    setSelectionMode(false);
+    setSelectedSceneIds(new Set());
+    setSelectedEventIds(new Set());
+    setDeleteConfirmationOpen(false);
+  };
+
+  const toggleSceneSelection = (sceneId) => {
+    setSelectedSceneIds((current) => {
+      const next = new Set(current);
+      if (next.has(sceneId)) next.delete(sceneId);
+      else next.add(sceneId);
+      return next;
+    });
+  };
+
+  const selectAllFilteredScenes = () => {
+    setSelectedSceneIds((current) => {
+      const next = new Set(current);
+      filteredScenes.forEach((scene) => next.add(scene.id));
+      return next;
+    });
+  };
+
+  const updateSelectedSceneStatus = async (status) => {
+    if (!selectedSceneCount) return;
+    const targets = sceneRecords.filter((scene) => selectedSceneIds.has(scene.id));
+    if (targets.some((scene) => !sereinSourceIdForScene(scene) || !scene.sourceUpdatedAt)) {
+      setSceneActionState("error");
+      setSceneActionMessage("所选内容里有尚未接入服务端写入的 Scene。");
+      return;
+    }
+    setSceneActionState("saving");
+    setSceneActionMessage("");
+    try {
+      const responses = await Promise.all(targets.map(async (scene) => {
+        const response = await fetch("/__serein/memory/set-scene-status", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            sceneId: sereinSourceIdForScene(scene),
+            expectedUpdatedAt: scene.sourceUpdatedAt,
+            status: status === "已沉底" ? "archived" : "active",
+          }),
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok || !["updated", "unchanged"].includes(payload.status)) {
+          throw new Error(payload.message || payload.reason || "Scene 状态修改失败");
+        }
+        return [scene.id, payload.updated_at || scene.sourceUpdatedAt];
+      }));
+      const revisions = new Map(responses);
+      setSceneRecords((current) => current.map((scene) => (
+        revisions.has(scene.id)
+          ? { ...scene, status, sourceUpdatedAt: revisions.get(scene.id) }
+          : scene
+      )));
+      setSelectedSceneIds(new Set());
+      setSceneActionState("saved");
+      setSceneActionMessage(status === "已沉底" ? "已归档" : "已恢复可浮现");
+    } catch (error) {
+      setSceneActionState("error");
+      setSceneActionMessage(error.message || "Scene 状态修改失败");
+    }
+  };
+
+  const confirmSelectedSceneDeletion = async () => {
+    if (!selectedSceneCount) return;
+    const deletedIds = new Set(selectedSceneIds);
+    const sourceIds = sceneRecords
+      .filter((scene) => deletedIds.has(scene.id))
+      .map(sereinSourceIdForScene)
+      .filter(Boolean);
+    if (sourceIds.length !== deletedIds.size) {
+      setSceneActionState("error");
+      setSceneActionMessage("所选内容里有尚未接入服务端删除的 Scene。");
+      setDeleteConfirmationOpen(false);
+      return;
+    }
+    setSceneActionState("saving");
+    try {
+      const response = await fetch("/__serein/memory/delete-scenes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sceneIds: sourceIds }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || Number(payload.deleted) !== sourceIds.length) {
+        throw new Error(payload.message || payload.error || "Scene 删除未全部完成");
+      }
+      tombstoneMemoryScenes(deletedIds);
+      setSceneRecords((current) => current
+        .filter((scene) => !deletedIds.has(scene.id))
+        .map((scene) => {
+          const relatedScenes = relatedScenesFor(scene)
+            .filter((relatedScene) => !deletedIds.has(relatedScene.id));
+          return {
+            ...scene,
+            relatedScenes,
+            relatedSceneIds: relatedScenes.map((relatedScene) => relatedScene.id),
+            relationCount: relatedScenes.length,
+          };
+        }));
+      setSelectedSceneId(null);
+      setSelectedSceneIds(new Set());
+      setDeleteConfirmationOpen(false);
+      setSceneActionState("saved");
+      setSceneActionMessage("已删除");
+    } catch (error) {
+      setSceneActionState("error");
+      setSceneActionMessage(error.message || "Scene 删除失败");
+    }
+  };
+
+  const beginEditingScene = (scene) => {
+    setEditingSceneId(scene.id);
+    setEditDraft({
+      date: scene.date,
+      title: scene.title,
+      bodyText: scene.body.join("\n\n"),
+    });
+    setSceneActionState("idle");
+    setSceneActionMessage("");
+  };
+
+  const cancelEditingScene = () => {
+    setEditingSceneId(null);
+    setEditDraft(null);
+  };
+
+  const saveEditedScene = async () => {
+    if (!selectedScene || !editDraft) return;
+    const title = editDraft.title.trim();
+    const date = editDraft.date.trim();
+    const body = editDraft.bodyText
+      .split(/\n\s*\n/)
+      .map((paragraph) => paragraph.trim())
+      .filter(Boolean);
+    const sourceId = sereinSourceIdForScene(selectedScene);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !title || !body.length || !sourceId || !selectedScene.sourceUpdatedAt) return;
+    setSceneActionState("saving");
+    setSceneActionMessage("");
+    try {
+      const response = await fetch("/__serein/memory/edit-scene", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sceneId: sourceId,
+          expectedUpdatedAt: selectedScene.sourceUpdatedAt,
+          date,
+          title,
+          content: body.join("\n\n"),
+        }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || !["updated", "unchanged"].includes(payload.status)) {
+        throw new Error(payload.message || payload.reason || "Scene 保存失败");
+      }
+      updateScene(selectedScene.id, () => ({
+        date,
+        title,
+        excerpt: sceneExcerpt(body),
+        body,
+        sourceUpdatedAt: payload.updated_at || selectedScene.sourceUpdatedAt,
+      }));
+      cancelEditingScene();
+      setSceneActionState("saved");
+      setSceneActionMessage(payload.status === "updated" ? "已写回服务端" : "内容没有变化");
+    } catch (error) {
+      setSceneActionState("error");
+      setSceneActionMessage(error.message || "Scene 保存失败");
+    }
+  };
+
+  const deleteAnnotation = async (sceneId, annotationId) => {
+    const scene = sceneRecords.find(item => item.id === sceneId);
+    const note = scene.annotations.find(item => item.id === annotationId);
+    try { await savePersonal("annotation", annotationId, note, sereinSourceIdForScene(scene), true); }
+    catch (error) { setSceneActionMessage(error.message); setSceneActionState("error"); return; }
+    updateScene(sceneId, (scene) => ({
+      annotations: scene.annotations.filter((annotation) => annotation.id !== annotationId),
+    }));
+  };
+
+  const addAnnotation = async (event) => {
+    event.preventDefault();
+    if (!selectedScene || !annotationDraft.trim()) return;
+    const content = annotationDraft.trim();
+    const annotationId = `annotation-${createUuid()}`;
+    const note = { content, ...defaultAnnotationIdentity, createdAt: new Date().toISOString() };
+    try { await savePersonal("annotation", annotationId, note, sereinSourceIdForScene(selectedScene)); }
+    catch (error) { setSceneActionMessage(error.message); setSceneActionState("error"); return; }
+    updateScene(selectedScene.id, (scene) => ({
+      annotations: [
+        ...scene.annotations,
+        {
+          id: annotationId,
+          ...defaultAnnotationIdentity,
+          createdAt: new Date().toLocaleString("zh-CN", {
+            month: "2-digit",
+            day: "2-digit",
+            hour: "2-digit",
+            minute: "2-digit",
+          }),
+          content,
+        },
+      ],
+    }));
+    setAnnotationDraft("");
+    setAnnotationComposerOpen(false);
+  };
+
+  const switchMemoryType = (type) => {
+    setMemoryType(type);
+    setView("all");
+    setQuery("");
+    setSelectedSceneId(null);
+    setSelectedFactEventId(null);
+    exitSelectionMode();
+  };
+
+  const openFactEvent = async (item) => {
+    setSelectedFactEventId(item.item_id);
+    setFactEventDetails((current) => ({ ...current, [item.item_id]: item }));
+    const queryHint = String(item.title || item.body || "").trim().slice(0, 200);
+    if (!queryHint) return;
+    try {
+      const matches = await requestFactEvents({
+        type: item.item_type,
+        status: "all",
+        query: queryHint,
+        includeSources: true,
+      });
+      const detail = matches.find((candidate) => candidate.item_id === item.item_id);
+      if (detail) setFactEventDetails((current) => ({ ...current, [item.item_id]: detail }));
+    } catch {
+      // Keep the cached summary open if source expansion is temporarily unavailable.
+    }
+  };
+
+  const acceptFactEventRevision = (previousId, revisedItem) => {
+    setFactEvents((current) => {
+      const next = {
+        ...current,
+        [revisedItem.item_type]: current[revisedItem.item_type]
+        .filter((item) => item.item_id !== previousId && item.item_id !== revisedItem.item_id)
+        .concat(revisedItem),
+      };
+      storeFactEventCache(next);
+      return next;
+    });
+    setFactEventDetails((current) => ({ ...current, [revisedItem.item_id]: revisedItem }));
+    setSelectedFactEventId(revisedItem.item_id);
+  };
+
+  const acceptFactEventStatus = (previousId, updatedItem) => {
+    setFactEvents((current) => {
+      const next = {
+        ...current,
+        [updatedItem.item_type]: current[updatedItem.item_type]
+        .filter((item) => item.item_id !== previousId)
+        .concat(updatedItem),
+      };
+      storeFactEventCache(next);
+      return next;
+    });
+    setSelectedFactEventId(null);
+  };
+
+  const acceptFactEventDeletion = (deletedIds, itemType) => {
+    const deleted = new Set(deletedIds);
+    setFactEvents((current) => {
+      const next = {
+        ...current,
+        [itemType]: current[itemType].filter((item) => !deleted.has(item.item_id)),
+      };
+      storeFactEventCache(next);
+      return next;
+    });
+    setSelectedFactEventId(null);
+  };
+
+  const toggleEventSelection = (itemId) => {
+    setSelectedEventIds(current => {
+      const next = new Set(current);
+      if (next.has(itemId)) next.delete(itemId);
+      else next.add(itemId);
+      return next;
+    });
+  };
+
+  const manageSelectedEvents = async (action) => {
+    if (eventBatchRunning.current) return;
+    const ids = activeFactEvents.filter(item => selectedEventIds.has(item.item_id)).map(item => item.item_id);
+    if (!ids.length) return;
+    if (action === "delete" && !window.confirm(
+      `永久删除选中的 ${ids.length} 条事件？它们的历史修订和来源副本也会删除，且无法撤销。原始聊天记录仍保留。`,
+    )) return;
+    eventBatchRunning.current = true;
+    setEventAction({ busy: true, error: false, message: `正在处理 0 / ${ids.length} 条…` });
+    try {
+      const result = await runEventBatch(ids, action, {
+        onProgress: ({ processed, total }) => setEventAction({ busy: true, error: false, message: `正在处理 ${processed} / ${total} 条…` }),
+      });
+      setFactEvents(current => {
+        const next = { ...current, event: applyEventBatch(current.event, result.receipts, true) };
+        storeFactEventCache(next);
+        return next;
+      });
+      setFactEventSearch(current => current.type === "event"
+        ? { ...current, items: applyEventBatch(current.items, result.receipts) } : current);
+      setFactEventDetails(current => Object.fromEntries(
+        applyEventBatch(Object.values(current), result.receipts).map(item => [item.item_id, item]),
+      ));
+      setSelectedEventIds(new Set(result.failures.map(failure => failure.itemId)));
+      const labels = { archive: "归档", restore: "取消归档", mute: "设为不自动浮现", delete: "删除" };
+      const succeeded = ids.filter(id => result.completed.has(id)).length;
+      const firstFailure = result.failures[0];
+      const failedItem = firstFailure && activeFactEvents.find(item => item.item_id === firstFailure.itemId);
+      setEventAction({ busy: false, error: Boolean(firstFailure), message: firstFailure
+        ? `已${labels[action]} ${succeeded} 条，${result.failures.length} 条未确认完成，已保留选中。“${failedItem?.title || firstFailure.itemId}”：${firstFailure.error}`
+        : `已${labels[action]} ${succeeded} 条事件。` });
+    } finally {
+      eventBatchRunning.current = false;
+      setEventAction(current => ({ ...current, busy: false }));
+    }
+  };
+
+  const selectedSceneIsEditing = selectedScene && editingSceneId === selectedScene.id;
+  const detailOpen = Boolean(selectedScene || selectedFactEvent);
+
+  return (
+    <div className="memory-layout">
+      <aside className="memory-filters" aria-label="记忆筛选" inert={eventAction.busy}>
+        <label className="memory-search">
+          <MagnifyingGlass size={18} weight="light" aria-hidden="true" />
+          <span className="sr-only">搜索{memoryTypeLabels[memoryType]}</span>
+          <input
+            type="search"
+            value={query}
+            placeholder={memoryType === "scene" ? "搜索 Scene" : `搜索${memoryTypeLabels[memoryType]}标题或正文`}
+            onChange={(event) => setQuery(event.target.value)}
+          />
+          {query ? (
+            <button type="button" aria-label="清空搜索" onClick={() => setQuery("")}>
+              <X size={14} weight="light" aria-hidden="true" />
+            </button>
+          ) : null}
+        </label>
+
+        <div className="memory-type-switch" aria-label="记忆类型">
+          {["scene", "event"].map((type) => (
+            <button
+              className={memoryType === type ? "is-active" : ""}
+              type="button"
+              aria-pressed={memoryType === type}
+              onClick={() => switchMemoryType(type)}
+              key={type}
+            >
+              {memoryTypeLabels[type]}
+            </button>
+          ))}
+        </div>
+
+        <div className="memory-filter-group">
+          <h2>视图</h2>
+          {memoryType === "scene" ? (
+            <>
+          <button
+            className={view === "all" ? "is-active" : ""}
+            type="button"
+            aria-pressed={view === "all"}
+            onClick={() => setView("all")}
+          >
+            <ListBullets size={17} weight="light" aria-hidden="true" />
+            <span>全部 Scene</span>
+            <small>{sceneRecords.length}</small>
+          </button>
+          <button
+            className={view === "favorite" ? "is-active" : ""}
+            type="button"
+            aria-pressed={view === "favorite"}
+            onClick={() => setView("favorite")}
+          >
+            <Heart size={17} weight="light" aria-hidden="true" />
+            <span>舍不得丢的</span>
+            <small>{sceneRecords.filter((scene) => scene.favorite).length}</small>
+          </button>
+          <button
+            className={view === "sunken" ? "is-active" : ""}
+            type="button"
+            aria-pressed={view === "sunken"}
+            onClick={() => setView("sunken")}
+          >
+            <Archive size={17} weight="light" aria-hidden="true" />
+            <span>已沉底</span>
+            <small>{sceneRecords.filter((scene) => scene.status === "已沉底").length}</small>
+          </button>
+          <button
+            className={view === "emergent" ? "is-active" : ""}
+            type="button"
+            aria-pressed={view === "emergent"}
+            onClick={() => setView("emergent")}
+          >
+            <Sparkle size={17} weight="light" aria-hidden="true" />
+            <span>可浮现</span>
+            <small>{sceneRecords.filter((scene) => scene.status === "可浮现").length}</small>
+          </button>
+            </>
+          ) : (
+            <>
+              <button className={view === "all" ? "is-active" : ""} type="button" aria-pressed={view === "all"} onClick={() => setView("all")}>
+                <ListBullets size={17} weight="light" aria-hidden="true" />
+                <span>正在使用</span>
+                <small>{(factEvents[memoryType] || []).filter((item) => item.status === "active").length}</small>
+              </button>
+              <button className={view === "archived" ? "is-active" : ""} type="button" aria-pressed={view === "archived"} onClick={() => setView("archived")}>
+                <Archive size={17} weight="light" aria-hidden="true" />
+                <span>已归档</span>
+                <small>{(factEvents[memoryType] || []).filter((item) => item.status === "archived").length}</small>
+              </button>
+              <button className={view === 'favorite' ? 'is-active' : ''} type="button" aria-pressed={view === 'favorite'} onClick={()=>setView('favorite')}>
+                <Heart size={17} weight="light" aria-hidden="true"/>
+                <span>舍不得丢的</span>
+                <small>{(factEvents[memoryType] || []).filter(item=>favoriteIds.has(item.item_id) && ['active','archived'].includes(item.status)).length}</small>
+              </button>
+            </>
+          )}
+        </div>
+
+      </aside>
+
+      <div className={`memory-workspace${detailOpen ? " is-detail-open" : ""}`}>
+        <section className="memory-stream" aria-labelledby="memory-title">
+          <header className="memory-stream__header">
+            <div>
+              <h1 id="memory-title">记忆</h1>
+              <p>{memoryType === "scene"
+                ? "Scene 按发生时间排列，保留它们原来的语气。"
+                : memoryType === "event"
+                  ? "事件只记录经过，不替我们判断它意味着什么。"
+                  : "事实保持短小、独立，并带着它来自哪一刻。"}</p>
+            </div>
+            <div className="memory-stream__header-actions">
+              <button type="button" disabled={exporting} onClick={exportMemories}>{exporting?"导出中…":"导出 Markdown"}</button>
+              <span aria-live="polite">{memoryType === "scene" ? filteredScenes.length : activeFactEvents.length} 个{memoryTypeLabels[memoryType]}</span>
+              {memoryType !== "fact" && !selectionMode ? (
+                <button type="button" onClick={enterSelectionMode}>
+                  <CheckSquare size={15} weight="light" aria-hidden="true" />
+                  批量整理
+                </button>
+              ) : null}
+            </div>
+          </header>
+          {sceneActionMessage ? (
+            <p className={`memory-action-message${sceneActionState === "error" ? " is-error" : ""}`} role={sceneActionState === "error" ? "alert" : "status"}>
+              {sceneActionMessage}
+            </p>
+          ) : null}
+
+          {memoryType === "event" && eventAction.message ? (
+            <p className={`memory-action-message${eventAction.error ? " is-error" : ""}`} role={eventAction.error ? "alert" : "status"}>
+              {eventAction.message}
+            </p>
+          ) : null}
+
+          {memoryType === "event" && selectionMode ? (
+            <div className="memory-batch-toolbar" aria-label="批量整理事件" aria-busy={eventAction.busy}>
+              <div>
+                <button type="button" onClick={exitSelectionMode} disabled={eventAction.busy}>退出批量</button>
+                <button type="button" onClick={() => setSelectedEventIds(new Set(activeFactEvents.map(item => item.item_id)))}
+                  disabled={eventAction.busy || !activeFactEvents.length || activeFactEvents.every(item => selectedEventIds.has(item.item_id))}>全选当前筛选</button>
+                <button type="button" onClick={() => setSelectedEventIds(new Set())} disabled={eventAction.busy || !selectedEventIds.size}>清空</button>
+              </div>
+              <div>
+                <span aria-live="polite">已选 {selectedEventIds.size} 条</span>
+                <button type="button" onClick={() => manageSelectedEvents(view === "archived" ? "restore" : "archive")}
+                  disabled={eventAction.busy || !selectedEventIds.size}>
+                  <Archive size={15} weight="light" aria-hidden="true" />{view === "archived" ? "取消归档" : "归档"}
+                </button>
+                <button type="button" onClick={() => manageSelectedEvents("mute")} disabled={eventAction.busy || !selectedEventIds.size}>不自动浮现</button>
+                <button className="is-danger" type="button" onClick={() => manageSelectedEvents("delete")} disabled={eventAction.busy || !selectedEventIds.size}>
+                  <Trash size={15} weight="light" aria-hidden="true" />删除
+                </button>
+              </div>
+            </div>
+          ) : null}
+
+          {memoryType === "scene" && selectionMode ? (
+            <div className="memory-batch-toolbar" aria-label="批量整理 Scene">
+              <div>
+                <button type="button" onClick={exitSelectionMode}>退出批量</button>
+                <button
+                  type="button"
+                  onClick={selectAllFilteredScenes}
+                  disabled={allFilteredScenesSelected || !filteredScenes.length}
+                >
+                  全选当前筛选
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSelectedSceneIds(new Set())}
+                  disabled={!selectedSceneCount}
+                >
+                  清空
+                </button>
+              </div>
+              <div>
+                <span aria-live="polite">已选 {selectedSceneCount} 条</span>
+                <button
+                  type="button"
+                  onClick={() => updateSelectedSceneStatus("已沉底")}
+                  disabled={!selectedSceneCount || sceneActionState === "saving"}
+                >
+                  <Archive size={15} weight="light" aria-hidden="true" />
+                  归档
+                </button>
+                <button
+                  type="button"
+                  onClick={() => updateSelectedSceneStatus("可浮现")}
+                  disabled={!selectedSceneCount || sceneActionState === "saving"}
+                >
+                  <ArrowCounterClockwise size={15} weight="light" aria-hidden="true" />
+                  恢复可浮现
+                </button>
+                <button
+                  className="is-danger"
+                  type="button"
+                  onClick={() => setDeleteConfirmationOpen(true)}
+                  disabled={!selectedSceneCount || sceneActionState === "saving"}
+                >
+                  <Trash size={15} weight="light" aria-hidden="true" />
+                  删除
+                </button>
+              </div>
+            </div>
+          ) : null}
+
+          {memoryType === "scene" ? (filteredScenes.length ? (
+            <ol className={`scene-timeline${selectionMode ? " is-batch-mode" : ""}`}>
+              {filteredScenes.map((scene, index) => {
+                const isSelected = selectedSceneId === scene.id;
+                const isBatchSelected = selectedSceneIds.has(scene.id);
+                return (
+                  <li
+                    className={[
+                      "scene-entry",
+                      isSelected ? "is-selected" : "",
+                      isBatchSelected ? "is-batch-selected" : "",
+                    ].filter(Boolean).join(" ")}
+                    key={scene.id}
+                    style={{ "--scene-index": index }}
+                  >
+                    {selectionMode ? (
+                      <span className="scene-entry__selection-marker" aria-hidden="true">
+                        {isBatchSelected
+                          ? <CheckSquare size={17} weight="fill" />
+                          : <Square size={17} weight="light" />}
+                      </span>
+                    ) : (
+                      <span className="scene-entry__marker" aria-hidden="true" />
+                    )}
+                    <button
+                      className="scene-entry__button"
+                      type="button"
+                      aria-pressed={selectionMode ? isBatchSelected : isSelected}
+                      aria-controls={selectionMode ? undefined : "scene-detail"}
+                      onClick={() => {
+                        if (selectionMode) toggleSceneSelection(scene.id);
+                        else setSelectedSceneId(scene.id);
+                      }}
+                    >
+                      <time dateTime={scene.date}>{scene.date}</time>
+                      <span className="scene-entry__title">
+                        <strong>{scene.title}</strong>
+                        {scene.favorite ? <Heart size={15} weight="fill" aria-label="已收藏" /> : null}
+                      </span>
+                      <p className="scene-entry__excerpt">{scene.excerpt}</p>
+                      <span className="scene-entry__meta" aria-label="Scene 信息">
+                        <span><LinkSimple size={15} weight="light" aria-hidden="true" />{scene.sourceCount} 条原文</span>
+                        <span><ShareNetwork size={15} weight="light" aria-hidden="true" />{scene.relationCount} 个关联</span>
+                        <span>
+                          {scene.status === "已沉底"
+                            ? <Archive size={15} weight="light" aria-hidden="true" />
+                            : <Sparkle size={15} weight="light" aria-hidden="true" />}
+                          {scene.status}
+                        </span>
+                        {scene.statusConsistent === false ? <span>状态待修复</span> : null}
+                      </span>
+                      {!selectionMode ? (
+                        <CaretRight className="scene-entry__chevron" size={18} weight="light" aria-hidden="true" />
+                      ) : null}
+                    </button>
+                  </li>
+                );
+              })}
+            </ol>
+          ) : (
+            <div className="memory-empty" role="status">
+              <MagnifyingGlass size={24} weight="light" aria-hidden="true" />
+              <h2>没有找到这一段</h2>
+              <p>换一个词，或者把时间放宽一点。</p>
+              <button
+                type="button"
+                onClick={() => {
+                  setQuery("");
+                  setView("all");
+                }}
+              >
+                查看全部 Scene
+              </button>
+            </div>
+          )) : factEventLoading ? (
+            <div className="memory-empty" role="status"><CalendarBlank size={24} weight="light" /><h2>正在翻这一页</h2></div>
+          ) : factEventDisplayError ? (
+            <div className="memory-empty" role="alert"><h2>暂时没有读到</h2><p>{factEventDisplayError}</p></div>
+          ) : activeFactEvents.length ? (
+            <ol className={`scene-timeline fact-event-timeline${selectionMode ? " is-batch-mode" : ""}`}>
+              {activeFactEvents.map((item, index) => {
+                const isSelected = selectedFactEventId === item.item_id;
+                const isBatchSelected = selectedEventIds.has(item.item_id);
+                const timeLabel = factEventTimeLabel(item);
+                return (
+                  <li className={`scene-entry${isSelected ? " is-selected" : ""}${isBatchSelected ? " is-batch-selected" : ""}`} key={item.item_id} style={{ "--scene-index": index }}>
+                    {selectionMode ? (
+                      <span className="scene-entry__selection-marker" aria-hidden="true">
+                        {isBatchSelected ? <CheckSquare size={17} weight="fill" /> : <Square size={17} weight="light" />}
+                      </span>
+                    ) : <span className="scene-entry__marker" aria-hidden="true" />}
+                    <button className="scene-entry__button" type="button" disabled={eventAction.busy}
+                      aria-pressed={selectionMode ? isBatchSelected : isSelected} aria-controls={selectionMode ? undefined : "scene-detail"}
+                      onClick={() => selectionMode ? toggleEventSelection(item.item_id) : openFactEvent(item)}>
+                      <time dateTime={`${item.local_date}T${item.local_start_time}`}>{timeLabel}</time>
+                      {item.item_type === "event" ? (
+                        <span className="scene-entry__title"><strong>{item.title}</strong>{favoriteIds.has(item.item_id)?<Heart size={15} weight="fill" aria-label="已收藏"/>:null}</span>
+                      ) : null}
+                      <p className={`scene-entry__excerpt${item.item_type === "fact" ? " is-fact" : ""}`}>{item.body}</p>
+                      <span className="scene-entry__meta">
+                        <span><LinkSimple size={15} weight="light" aria-hidden="true" />{factEventSourceCount(item)} 条原文</span>
+                        <span>{item.item_type === "event"
+                          ? item.status==='archived' ? '已归档，不自动浮现' : item.surface_state?.reasons?.includes("covered_by_scene") ? "Scene 已覆盖，不自动浮现" : item.recallable === true ? "可自动浮现" : item.recallable === false ? "不自动浮现" : "召回资格未审核"
+                          : "不参与普通召回"}</span>
+                        {item.injection_count ? <span>已注入 {item.injection_count} 次</span> : null}
+                      </span>
+                      {!selectionMode ? <CaretRight className="scene-entry__chevron" size={18} weight="light" aria-hidden="true" /> : null}
+                    </button>
+                  </li>
+                );
+              })}
+            </ol>
+          ) : (
+            <div className="memory-empty" role="status">
+              <MagnifyingGlass size={24} weight="light" aria-hidden="true" />
+              <h2>这一页还是空的</h2>
+              <p>换一天、换一个月，或者清空搜索。</p>
+              <button type="button" onClick={() => { setQuery(""); setView("all"); }}>查看全部</button>
+            </div>
+          )}
+        </section>
+
+        <button
+          className="scene-detail__veil"
+          type="button"
+          aria-label="关闭记忆详情"
+          tabIndex={detailOpen ? 0 : -1}
+          onClick={() => { setSelectedSceneId(null); setSelectedFactEventId(null); }}
+        />
+
+        <aside
+          ref={detailRef}
+          className="scene-detail"
+          id="scene-detail"
+          aria-label="记忆详情"
+          aria-hidden={!detailOpen}
+          inert={!detailOpen}
+        >
+          {selectedScene ? (
+            <div className="scene-detail__content" key={selectedScene.id}>
+              <button
+                className="scene-detail__close"
+                type="button"
+                aria-label="关闭记忆详情"
+                onClick={() => setSelectedSceneId(null)}
+              >
+                <X size={24} weight="light" aria-hidden="true" />
+              </button>
+
+              <header className="scene-detail__header">
+                <div className="scene-detail__header-top">
+                  {selectedSceneIsEditing ? (
+                    <input
+                      className="scene-editor__date"
+                      type="date"
+                      aria-label="记忆日期"
+                      value={editDraft.date}
+                      onChange={(event) => setEditDraft((current) => ({ ...current, date: event.target.value }))}
+                    />
+                  ) : (
+                    <time dateTime={selectedScene.date}>{selectedScene.date}</time>
+                  )}
+                  <div className="scene-detail__edit-actions">
+                    {selectedSceneIsEditing ? (
+                      <>
+                        <button type="button" onClick={cancelEditingScene} disabled={sceneActionState === "saving"}>取消</button>
+                        <button className="is-primary" type="button" onClick={saveEditedScene} disabled={sceneActionState === "saving"}>
+                          <Check size={14} weight="light" aria-hidden="true" />
+                          {sceneActionState === "saving" ? "保存中…" : "保存"}
+                        </button>
+                      </>
+                    ) : (
+                      <button type="button" onClick={() => beginEditingScene(selectedScene)} disabled={!sereinSourceIdForScene(selectedScene) || !selectedScene.sourceUpdatedAt}>
+                        <PencilSimple size={14} weight="light" aria-hidden="true" />
+                        编辑记忆
+                      </button>
+                    )}
+                  </div>
+                </div>
+                {selectedSceneIsEditing ? (
+                  <input
+                    className="scene-editor__title"
+                    aria-label="记忆标题"
+                    value={editDraft.title}
+                    onChange={(event) => setEditDraft((current) => ({ ...current, title: event.target.value }))}
+                  />
+                ) : (
+                  <h2>{selectedScene.title}</h2>
+                )}
+                <div className="scene-detail__meta" aria-label="Scene 信息">
+                  <span><LinkSimple size={15} weight="light" aria-hidden="true" />{selectedScene.sourceCount} 条原文</span>
+                  <span><ShareNetwork size={15} weight="light" aria-hidden="true" />{selectedScene.relationCount} 个关联</span>
+                  {selectedScene.narrativeRefs.length ? (
+                    <span><BookOpenText size={15} weight="light" aria-hidden="true" />{selectedScene.narrativeRefs.length} 个叙事卷引用</span>
+                  ) : null}
+                  <button
+                    className={`scene-detail__favorite${selectedScene.favorite ? " is-active" : ""}`}
+                    type="button"
+                    aria-pressed={selectedScene.favorite}
+                    onClick={() => toggleFavorite(selectedScene.id)}
+                  >
+                    <Heart size={15} weight={selectedScene.favorite ? "fill" : "light"} aria-hidden="true" />
+                    {selectedScene.favorite ? "已收藏" : "收藏"}
+                  </button>
+                </div>
+                {sceneActionMessage ? <p className={`fact-event-detail__message${sceneActionState === "error" ? " is-error" : ""}`}>{sceneActionMessage}</p> : null}
+                <SceneDomainEditor
+                  key={`scene-domain-${selectedScene.id}-${selectedScene.bucketDomain}`}
+                  scene={selectedScene}
+                  onSaved={(bucketDomain) => updateScene(selectedScene.id, () => ({ bucketDomain }))}
+                />
+              </header>
+
+              {selectedSceneIsEditing ? (
+                <div className="scene-editor">
+                  <label>
+                    <span>正文</span>
+                    <textarea
+                      rows={10}
+                      value={editDraft.bodyText}
+                      onChange={(event) => setEditDraft((current) => ({ ...current, bodyText: event.target.value }))}
+                    />
+                  </label>
+                  <p>用空行分开段落。保存后会写回服务端，并保留上一版。</p>
+                </div>
+              ) : (
+                <MarkdownProjection
+                  className="scene-detail__body"
+                  content={selectedScene.body}
+                />
+              )}
+
+              <SceneCueEditor
+                key={`scene-cues-${selectedScene.id}`}
+                scene={selectedScene}
+                onSaved={(cues) => updateScene(selectedScene.id, () => ({ cues }))}
+              />
+
+              <SceneEvidenceEditor
+                key={`scene-evidence-${selectedScene.id}`}
+                sceneId={sereinSourceIdForScene(selectedScene)}
+                sceneTitle={selectedScene.title}
+              />
+
+              <section className="scene-annotations" aria-labelledby={`scene-annotations-${selectedScene.id}`}>
+                <header className="scene-annotations__header">
+                  <div>
+                    <ChatCircleText size={19} weight="light" aria-hidden="true" />
+                    <h3 id={`scene-annotations-${selectedScene.id}`}>记忆注脚</h3>
+                    <span>{selectedScene.annotations.length}</span>
+                  </div>
+                  <button type="button" onClick={() => setAnnotationComposerOpen((current) => !current)}>
+                    <Plus size={15} weight="light" aria-hidden="true" />
+                    写下注脚
+                  </button>
+                </header>
+
+                {selectedScene.annotations.length ? (
+                  <div className="scene-annotations__list">
+                    {selectedScene.annotations.map((annotation) => (
+                      <article className="scene-annotation" key={annotation.id}>
+                        <header>
+                          <div>
+                            <strong>{annotation.author}</strong>
+                            <span>{annotation.role === "unknown" ? "旧记录" : annotation.role}</span>
+                            {annotation.createdAt ? <time>{annotation.createdAt}</time> : null}
+                          </div>
+                          <button
+                            type="button"
+                            aria-label={`删除 ${annotation.author} 的注脚`}
+                            onClick={() => deleteAnnotation(selectedScene.id, annotation.id)}
+                          >
+                            <Trash size={15} weight="light" aria-hidden="true" />
+                          </button>
+                        </header>
+                        <MarkdownProjection
+                          className="scene-annotation__content"
+                          content={annotation.content}
+                        />
+                      </article>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="scene-annotations__empty">这里还没有注脚。</p>
+                )}
+
+                {annotationComposerOpen ? (
+                  <form className="scene-annotation-composer" onSubmit={addAnnotation}>
+                    <textarea
+                      autoFocus
+                      rows={4}
+                      value={annotationDraft}
+                      placeholder="写下你想留在这段记忆旁边的话…"
+                      onChange={(event) => setAnnotationDraft(event.target.value)}
+                    />
+                    <footer>
+                      <span>{defaultAnnotationIdentity.author} · {defaultAnnotationIdentity.role}</span>
+                      <div>
+                        <button type="button" onClick={() => {
+                          setAnnotationDraft("");
+                          setAnnotationComposerOpen(false);
+                        }}>
+                          取消
+                        </button>
+                        <button className="is-primary" type="submit" disabled={!annotationDraft.trim()}>
+                          添加注脚
+                        </button>
+                      </div>
+                    </footer>
+                  </form>
+                ) : null}
+              </section>
+
+              <div className="scene-reference-stack">
+                <section className="scene-reference-section" aria-labelledby={`scene-related-${selectedScene.id}`}>
+                  <h3 id={`scene-related-${selectedScene.id}`}>关联 Scene</h3>
+                  {relatedScenesFor(selectedScene).length ? (
+                    <div className="scene-related-list">
+                      {relatedScenesFor(selectedScene).map((relatedSceneRecord) => {
+                      const relatedScene = sceneRecords.find((scene) => scene.id === relatedSceneRecord.id);
+                      return relatedScene ? (
+                        <div className="scene-related-edge" key={relatedScene.id}>
+                          <button
+                            className="scene-related-edge__open"
+                            type="button"
+                            onClick={() => setSelectedSceneId(relatedScene.id)}
+                          >
+                            <span>{relatedScene.title}</span>
+                            {relatedSceneRecord.relations?.length ? (
+                              <small>
+                                {[...new Set(relatedSceneRecord.relations.map(relationLabel))].join(" · ")}
+                              </small>
+                            ) : null}
+                          </button>
+                          {selectedSceneIsEditing && relatedSceneRecord.relations?.length>0 && <button type="button" className="scene-related-edge__remove"
+                            disabled={sceneActionState==="saving"} aria-label={`移除与${relatedScene.title}的关联`} onClick={()=>removeRelatedScene(relatedSceneRecord)}><X size={16}/></button>}
+                        </div>
+                      ) : null;
+                    })}
+                    </div>
+                  ) : (
+                    <p className="scene-reference-section__empty">还没有通过审核的关系边。</p>
+                  )}
+                </section>
+
+                {selectedScene.narrativeRefs.length ? (
+                  <section className="scene-reference-section" aria-labelledby={`scene-narrative-${selectedScene.id}`}>
+                    <h3 id={`scene-narrative-${selectedScene.id}`}>被叙事卷引用</h3>
+                    <div className="scene-narrative-list">
+                      {selectedScene.narrativeRefs.map((reference) => (
+                        <div key={reference.id}>
+                          <LinkSimple size={16} weight="light" aria-hidden="true" />
+                          <span>{reference.roll} · {reference.chapter}</span>
+                          <strong>{reference.title}</strong>
+                        </div>
+                      ))}
+                    </div>
+                  </section>
+                ) : null}
+              </div>
+            </div>
+          ) : selectedFactEvent ? (
+            <FactEventDetail
+              onFavoriteChanged={acceptFavorite}
+              key={selectedFactEvent.item_id}
+              item={selectedFactEvent}
+              onClose={() => setSelectedFactEventId(null)}
+              onRevised={acceptFactEventRevision}
+              onStatusChanged={acceptFactEventStatus}
+              onDeleted={acceptFactEventDeletion}
+            />
+          ) : null}
+        </aside>
+      </div>
+
+      {deleteConfirmationOpen ? (
+        <div className="memory-delete-dialog__veil">
+          <section
+            className="memory-delete-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="memory-delete-dialog-title"
+            aria-describedby="memory-delete-dialog-description"
+          >
+            <span>DELETE SCENE</span>
+            <h2 id="memory-delete-dialog-title">删除这 {selectedSceneCount} 条记忆？</h2>
+            <p id="memory-delete-dialog-description">
+              删除后，这些 Scene 会从搜索、关联和召回中消失；正式数据层会同时清除 Scene 与 cue 的 embedding。此操作不能在这里恢复。
+            </p>
+            <div>
+              <button type="button" onClick={() => setDeleteConfirmationOpen(false)} disabled={sceneActionState === "saving"}>取消</button>
+              <button className="is-danger" type="button" onClick={confirmSelectedSceneDeletion} disabled={sceneActionState === "saving"}>
+                {sceneActionState === "saving" ? "删除中…" : `删除 ${selectedSceneCount} 条`}
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
+    </div>
+  );
+}

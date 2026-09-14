@@ -1,0 +1,49 @@
+services:
+  memory:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      SEREIN_HTTP_TOKEN_FILE: /secrets/api-token
+      SEREIN_MIGRATION_PATH_ROOT: /legacy/input
+    volumes:
+      - ./config.toml:/config/config.toml:ro
+      - ./secrets:/secrets:ro
+      - ./runtime:/data
+      - ${SEREIN_LEGACY_SOURCE:-./runtime/legacy-input}:/legacy/input:ro
+    entrypoint: ["python", "-m", "serein.launch"]
+    command: ["--config", "/config/config.toml", "http", "--live", "--host", "0.0.0.0", "--port", "8011"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8011/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    networks: [serein]
+  gateway:
+    build:
+      context: ..
+      dockerfile: deploy/Gateway.Dockerfile
+    restart: unless-stopped
+    depends_on:
+      memory:
+        condition: service_healthy
+    environment:
+      SEREIN_MEMORY_URL: http://memory:8011
+      SEREIN_MEMORY_TOKEN_FILE: /secrets/api-token
+      SEREIN_WEB_AUTH_FILE: /secrets/web-auth.json
+      SEREIN_INSTALL_ROOT: ${SEREIN_INSTALL_ROOT:-}
+      SEREIN_LEGACY_SOURCE_HOST: ${SEREIN_LEGACY_SOURCE_HOST:-}
+      SEREIN_LEGACY_SOURCE_CONFIGURED: ${SEREIN_LEGACY_SOURCE_CONFIGURED:-0}
+    ports:
+      - "${SEREIN_BIND:-127.0.0.1}:${SEREIN_PORT:-18217}:8080"
+    volumes:
+      - ./secrets:/secrets:ro
+    networks: [serein]
+    healthcheck:
+      test: ["CMD", "node", "--input-type=module", "-e", "const r = await fetch('http://127.0.0.1:8080/ready'); if (!r.ok) process.exit(1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+networks:
+  serein:

@@ -1,0 +1,28 @@
+# Paste into Settings -> Upstreams and models -> Import from template.
+# Each upstream owns one connection; the chat client sees all listed model IDs.
+gateway:
+  upstreams:
+    - name: provider-a
+      protocol: openai
+      base_url: https://provider-a.example/v1
+      api_key_env: SEREIN_PROVIDER_A_KEY
+      default_model: chat-fast
+      prompt_cache: openai
+      models:
+        - chat-fast
+        - id: a-smart
+          upstream_model: provider-smart-model
+        - id: embedding
+          upstream_model: provider-embedding-model
+        - id: reranker
+          upstream_model: provider-rerank-model
+    - name: provider-b
+      protocol: anthropic
+      base_url: https://provider-b.example/v1
+      api_key_env: SEREIN_PROVIDER_B_KEY
+      anthropic_version: '2023-06-01'
+      prompt_cache: anthropic_explicit
+      prompt_cache_retention: 1h
+      models:
+        - id: b-smart
+          upstream_model: another-provider-model

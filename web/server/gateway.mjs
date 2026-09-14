@@ -1,0 +1,67 @@
+import http from 'node:http';
+import https from 'node:https';
+import { fileURLToPath } from 'node:url';
+import { readFileSync } from 'node:fs';
+import { preview } from 'vite';
+import { requireWebAuth } from './webAuth.mjs';
+
+const filename = process.env.SEREIN_WEB_AUTH_FILE;
+if (!filename) throw new Error('SEREIN_WEB_AUTH_FILE is required');
+const core = new URL(process.env.SEREIN_MEMORY_URL);
+process.env.SEREIN_MEMORY_TOKEN = readFileSync(process.env.SEREIN_MEMORY_TOKEN_FILE, 'utf8').trim();
+if (!process.env.SEREIN_MEMORY_TOKEN) throw new Error('Memory token is empty');
+const web = await preview({ root: fileURLToPath(new URL('../', import.meta.url)),
+  preview: { host: '127.0.0.1', port: Number(process.env.SEREIN_PREVIEW_PORT || 4173), strictPort: true, allowedHosts: true } });
+const bearerPaths = new Set(['/v1/models', '/v1/chat/completions',
+  '/api/hook/recall', '/v1/host/deliveries']);
+const hopHeaders = ['connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization', 'te', 'trailer', 'transfer-encoding', 'upgrade'];
+
+const server = http.createServer((req, res) => {
+  const path = new URL(req.url, 'http://localhost').pathname;
+  if (path === '/ready' && req.method === 'GET') {
+    Promise.all([fetch(new URL('/health', core), {signal:AbortSignal.timeout(3000)}),
+      fetch(`http://127.0.0.1:${web.httpServer.address().port}/`, {signal:AbortSignal.timeout(3000)})])
+      .then(results => { res.writeHead(results.every(r => r.ok) ? 200 : 503); res.end(); })
+      .catch(() => { res.writeHead(503); res.end(); });
+    return;
+  }
+  const mcp = ['/serein/mcp', '/serein/mcp/', '/mcp', '/mcp/'].includes(path);
+  const chat = bearerPaths.has(path) || mcp;
+  if (mcp && req.headers.origin) {
+    let originOK = false;
+    try { originOK = new URL(req.headers.origin).host === req.headers.host; } catch {}
+    if (!originOK) { res.writeHead(403); res.end('Invalid origin'); return; }
+  }
+  if (!chat && !requireWebAuth(req, res, filename)) return;
+  if (!chat && !['GET','HEAD','OPTIONS'].includes(req.method)) {
+    let originOK = true;
+    try { if (req.headers.origin) originOK = new URL(req.headers.origin).host === req.headers.host; }
+    catch { originOK = false; }
+    if (!originOK || !String(req.headers['content-type'] || '').startsWith('application/json')) {
+      res.writeHead(403); res.end('Same-origin JSON required'); return;
+    }
+  }
+  if (chat && !req.headers.authorization?.startsWith('Bearer ')) {
+    res.writeHead(401); res.end('Bearer token required'); return;
+  }
+  const target = chat ? core : new URL(`http://127.0.0.1:${process.env.SEREIN_PREVIEW_PORT || 4173}`);
+  const headers = { ...req.headers, host: chat ? target.host : req.headers.host };
+  if (mcp) headers['x-forwarded-host'] = req.headers.host;
+  for (const key of hopHeaders) delete headers[key];
+  if (!chat) delete headers.authorization;
+  const proxy = (target.protocol === 'https:' ? https : http).request(target, {
+    method: req.method, path: req.url, headers,
+  }, upstream => {
+    const responseHeaders = { ...upstream.headers };
+    for (const key of hopHeaders) delete responseHeaders[key];
+    res.writeHead(upstream.statusCode, responseHeaders);
+    upstream.pipe(res);
+  });
+  proxy.on('error', () => { if (!res.headersSent) res.writeHead(502); res.end('Backend unavailable'); });
+  res.on('close', () => { if (!res.writableEnded) proxy.destroy(); });
+  req.pipe(proxy);
+});
+server.listen(Number(process.env.SEREIN_GATEWAY_PORT || 8080), process.env.SEREIN_GATEWAY_BIND || '0.0.0.0');
+for (const signal of ['SIGTERM', 'SIGINT']) process.on(signal, () => {
+  server.close(); web.httpServer.close();
+});

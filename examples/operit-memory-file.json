@@ -1,0 +1,7 @@
+{
+  "exportDate": 1767348060000,
+  "memories": [
+    {"uuid": "sample-operit-reading-memory", "title": "读书会（示例）", "content": "周六的读书会定在下午三点，地点是图书馆。\n\n记得带上借来的书。", "contentType": "text/plain", "createdAt": 1767348000000, "updatedAt": 1767348060000, "tagNames": ["读书会"], "folderPath": "日常/阅读", "source": "sample", "importance": 0.5}
+  ],
+  "links": []
+}

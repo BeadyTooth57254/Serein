@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="600" height="740" viewBox="0 0 600 740" role="img" aria-labelledby="title desc">
+  <title id="title">一轮聊天的自动召回</title>
+  <desc id="desc">从当前用户消息出发，判断检索需要与范围，查找 Scene 和 Event 候选，再由重排模型比较相关性，检查当前可读状态和冷却，最后交付记忆卡片及按需读取的 Arc 目录。没有可靠结果时不加记忆，继续聊天。</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M1 1 8 5 1 9" fill="none" stroke="#72918a" stroke-width="1.5"/></marker>
+  </defs>
+  <rect width="600" height="740" rx="20" fill="#f8faf9"/>
+  <g font-family="'Noto Sans CJK SC','Microsoft YaHei','PingFang SC',sans-serif" text-anchor="middle">
+    <g fill="#fff" stroke="#c5d7cf">
+      <rect x="38" y="28" width="524" height="104" rx="14"/>
+      <rect x="38" y="158" width="524" height="104" rx="14"/>
+      <rect x="38" y="288" width="524" height="104" rx="14"/>
+      <rect x="38" y="418" width="524" height="104" rx="14"/>
+      <rect x="38" y="548" width="524" height="104" rx="14" fill="#edf4f1"/>
+    </g>
+    <g fill="none" stroke="#72918a" stroke-width="2" marker-end="url(#arrow)">
+      <path d="M300 133 V150"/>
+      <path d="M300 263 V280"/>
+      <path d="M300 393 V410"/>
+      <path d="M300 523 V540"/>
+    </g>
+    <g font-size="25" fill="#243f39">
+      <text x="300" y="72">当前用户消息</text>
+      <text x="300" y="202">寻找 Scene 与 Event 候选</text>
+      <text x="300" y="332">比较与当前问题的相关性</text>
+      <text x="300" y="462">确认本轮能否带入</text>
+      <text x="300" y="592">交给聊天模型</text>
+    </g>
+    <g font-size="20" fill="#52645d">
+      <text x="300" y="109">判断是否检索，利用实体与 Arc 确定范围</text>
+      <text x="300" y="239">整条正文 / 长文片段 / 可选关联候选</text>
+      <text x="300" y="369">重排模型筛选，向量接近不等于选中</text>
+      <text x="300" y="499">复查状态、版本和冷却，默认最多两条</text>
+      <text x="300" y="629">记忆卡片 + 按需读取的 Arc 材料目录</text>
+    </g>
+    <text x="300" y="706" font-size="22" fill="#60716b">没有可靠结果：不加记忆，继续聊天</text>
+  </g>
+</svg>

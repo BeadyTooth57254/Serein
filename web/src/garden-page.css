@@ -1,0 +1,15 @@
+.app-shell--garden { height: 100dvh; overflow: hidden; background: #080b0d; }
+.garden-page { position: fixed; inset: 0; background: #080b0d; }
+.garden-frame { display: block; width: 100%; height: 100%; border: 0; background: #080b0d; }
+.garden-blackout { position: fixed; z-index: 100; inset: 0; display: grid; place-items: center; background: #080b0d; opacity: 0; visibility: visible; pointer-events: auto; transition: opacity 450ms ease; }
+.garden-blackout--covering, .garden-blackout--loading { opacity: 1; }
+.garden-blackout--revealing { opacity: 0; transition-duration: 900ms; }
+.garden-blackout--idle { visibility: hidden; pointer-events: none; }
+.garden-blackout p { margin: 0; color: #a09b95; font-family: var(--font-editorial-cjk); font-size: 13px; letter-spacing: .16em; animation: garden-loading 600ms 700ms both; }
+.garden-return { position: fixed; z-index: 101; top: 24px; left: 31px; display: flex; align-items: center; gap: 10px; padding: 9px 0; border: 0; background: none; color: #aaa6a1; opacity: .65; cursor: pointer; font-family: var(--font-editorial-cjk); font-size: 13px; letter-spacing: .1em; text-shadow: 0 1px 8px #000; transition: opacity 300ms ease; }
+.garden-return:hover, .garden-return:focus-visible { opacity: 1; }
+.garden-return:focus-visible { outline: 1px solid #aaa091; outline-offset: 6px; }
+@keyframes garden-loading { from { opacity: 0; } to { opacity: 1; } }
+@media (max-width: 640px) {
+  .garden-return { top: 9px; left: 18px; font-size: 12px; }
+}

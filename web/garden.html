@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#080b0d" />
+    <link rel="icon" href="data:," />
+    <title>a garden of us</title>
+    <style>html, body { margin: 0; background: #080b0d; }</style>
+  </head>
+  <body>
+    <main id="garden" aria-label="雨夜中的记忆花园">
+      <canvas id="world" aria-label="拖动移雨，松开后雨继续落下；右键或双指拖动视角，滚轮或双指缩放；轻触选择盛开的花" tabindex="0"></canvas>
+      <button id="garden-back" class="garden-back" type="button" aria-label="返回记忆库">← 返回</button>
+      <header class="title">
+        <h1>a garden of us</h1>
+        <p class="line">雨落下的地方，记忆正在开花。</p>
+      </header>
+      <nav class="tools" aria-label="花园控制">
+        <button id="rain-toggle" aria-pressed="true">让雨停下</button>
+        <span aria-hidden="true">/</span>
+        <button id="reset">回到这里</button>
+        <button id="clear-selection" hidden>取消选中</button>
+      </nav>
+      <p id="hint" class="hint">拖动移雨 · 右键移景 · 滚轮靠近 · 轻触一朵花</p>
+      <p id="status" class="status" role="status" aria-live="polite"></p>
+      <p id="data-note" class="data-note"></p>
+      <div id="memory-loading" class="memory-loading" role="status">
+        <p id="memory-loading-message">记忆正在回到花园…</p>
+        <button id="memory-retry" hidden>重新读取</button>
+      </div>
+      <aside id="memory-detail" class="memory-detail" aria-labelledby="memory-detail-title" hidden></aside>
+      <div id="failure" hidden>花园暂时没有绘制出来，请检查浏览器的硬件加速是否开启。</div>
+    </main>
+    <script type="module" src="/src/garden/entry.js"></script>
+  </body>
+</html>

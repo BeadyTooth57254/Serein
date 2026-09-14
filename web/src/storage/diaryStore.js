@@ -1,0 +1,280 @@
+import { identityName } from "./instanceStore.js";
+import { defaultDiaryEntries } from "../data/diary.js";
+import { people } from "../data/awake.js";
+import { readLocalPreference } from "./awakeStore.js";
+
+const diaryStorageKey = "serein.diary.entries.v1";
+const diarySnapshotStorageKey = "serein.diary.snapshot.v1";
+const supplementalSeedIds = new Set();
+
+function splitParagraphs(content) {
+  return String(content || "")
+    .replace(/\r\n?/g, "\n")
+    .trim()
+    .split(/\n\s*\n/)
+    .map((paragraph) => paragraph.trim())
+    .filter(Boolean);
+}
+
+function excerptFrom(body) {
+  const plain = String(body[0] || "")
+    .replace(/^\s{0,3}#{1,6}\s+/u, "")
+    .replace(/[*_`>#-]+/gu, "")
+    .replace(/\s+/gu, " ")
+    .trim();
+  return plain.length <= 92 ? plain : `${plain.slice(0, 91)}…`;
+}
+
+function localTime(value) {
+  const match = String(value || "").match(/T(\d{2}:\d{2})/u);
+  return match?.[1] || "00:00";
+}
+
+function projectLiveEntry(entry) {
+  const bodyAvailable = entry?.body_available !== false && entry?.locked !== true;
+  const body = bodyAvailable ? splitParagraphs(entry.content) : [];
+  const author = identityName(entry?.author);
+  const role = entry?.author === "user" ? "user" : "assistant";
+  return {
+    id: `diary-vps-${entry.id}`,
+    date: String(entry.date || ""),
+    time: localTime(entry.created_at),
+    author,
+    role,
+    darkroom: entry.entry_type === "darkroom",
+    locked: entry.locked === true,
+    unlockAt: String(entry.unlock_at || ""),
+    title: String(entry.title || `${entry.date || ""} 的日记`),
+    excerpt: bodyAvailable ? excerptFrom(body) : "门还没有开。",
+    body,
+    references: [],
+    comments: (Array.isArray(entry.comments) ? entry.comments : []).map((comment) => ({
+      id: `diary-comment-vps-${comment.id}`,
+      author: identityName(comment.author),
+      role: comment.author === "user" ? "user" : "assistant",
+      createdAt: String(comment.created_at || ""),
+      content: String(comment.content || ""),
+    })),
+    revision: Number(entry.revision || 1),
+    sourceId: String(entry.source_id || entry.metadata?.legacy_entry_id || ""),
+    emotionTags: Array.isArray(entry.emotion_tags) ? entry.emotion_tags : [],
+    sourceKind: "serein-diary-live-readonly",
+  };
+}
+
+function mergeSavedDiaryState(liveEntries, savedEntries) {
+  const saved = Array.isArray(savedEntries) ? savedEntries : [];
+  const savedById = new Map(saved.map((entry) => [entry?.id, entry]));
+  const merged = liveEntries.map((entry) => {
+    const local = savedById.get(entry.id);
+    if (!local) return entry;
+    if (Number(local.revision || 0) > Number(entry.revision || 0)) {
+      return { ...entry, ...local, comments: entry.comments, sourceKind: entry.sourceKind };
+    }
+    return entry;
+  });
+  const liveIds = new Set(liveEntries.map((entry) => entry.id));
+  return [
+    ...merged,
+    ...saved.filter((entry) => entry?.id && !liveIds.has(entry.id) && !String(entry.id).startsWith("diary-vps-")),
+  ];
+}
+
+export function readDiaryUserIdentity() {
+  return {
+    author: readLocalPreference("serein.awake.name.user", people[0].name),
+    role: "user",
+  };
+}
+
+function normalizeEntry(entry, fallbackIdentity) {
+  if (!entry || typeof entry !== "object") return null;
+  if (
+    typeof entry.id !== "string"
+    || typeof entry.date !== "string"
+    || typeof entry.time !== "string"
+    || typeof entry.title !== "string"
+    || typeof entry.excerpt !== "string"
+    || !Array.isArray(entry.body)
+  ) return null;
+
+  return {
+    ...entry,
+    author: typeof entry.author === "string" && entry.author.trim()
+      ? entry.author
+      : fallbackIdentity.author,
+    role: typeof entry.role === "string" && entry.role.trim()
+      ? entry.role
+      : fallbackIdentity.role,
+    darkroom: typeof entry.darkroom === "boolean"
+      ? entry.darkroom
+      : fallbackIdentity.darkroom === true,
+    body: entry.body.filter((paragraph) => typeof paragraph === "string"),
+    references: Array.isArray(entry.references)
+      ? entry.references.filter((reference) => (
+        reference
+        && typeof reference.id === "string"
+        && typeof reference.kind === "string"
+        && typeof reference.title === "string"
+      ))
+      : [],
+    comments: Array.isArray(entry.comments)
+      ? entry.comments.filter((comment) => (
+        comment
+        && typeof comment.id === "string"
+        && typeof comment.author === "string"
+        && typeof comment.role === "string"
+        && typeof comment.content === "string"
+      ))
+      : [],
+  };
+}
+
+export async function loadDiarySnapshot() {
+  try {
+    let response = await fetch("/__serein/live/diaries", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
+    let snapshot = response.ok ? await response.json() : null;
+    const isLive = snapshot?.status === "ok" && Array.isArray(snapshot.entries);
+    if (!isLive) return null;
+
+    if (!response.ok) return null;
+    if (
+      !snapshot
+      || typeof snapshot.snapshotId !== "string"
+      || !Array.isArray(snapshot.entries)
+    ) return null;
+
+    const storedEntries = JSON.parse(window.localStorage.getItem(diaryStorageKey));
+
+    const userIdentity = readDiaryUserIdentity();
+    const projectedEntries = isLive
+      ? snapshot.entries.filter((entry) => entry.entry_type !== "darkroom" || !entry.visibility || entry.visibility === "active").map(projectLiveEntry)
+      : snapshot.entries;
+    const entries = mergeSavedDiaryState(projectedEntries, storedEntries)
+      .map((entry) => normalizeEntry(entry, userIdentity))
+      .filter(Boolean);
+    window.localStorage.setItem(diarySnapshotStorageKey, snapshot.snapshotId);
+    return entries;
+  } catch {
+    return null;
+  }
+}
+
+export async function deleteDiaryEntry(entry) {
+  const liveId = String(entry?.id || "").match(/^diary-vps-(\d+)$/u)?.[1];
+  if (!liveId) return { status: "deleted", scope: "local" };
+
+  const response = await fetch(`/__serein/live/diaries/${liveId}`, {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload.message || "这篇日记没有删掉，请稍后再试。");
+  }
+  return payload;
+}
+
+export async function saveDiaryEntry(entry, draft) {
+  const liveId = String(entry?.id || "").match(/^diary-vps-(\d+)$/u)?.[1];
+  const response = await fetch(
+    liveId ? `/__serein/live/diaries/${liveId}` : "/__serein/live/diaries/entry",
+    {
+      method: liveId ? "PUT" : "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        date: draft.date,
+        title: draft.title,
+        content: draft.body,
+        ...(liveId ? {} : { author: entry?.role === "assistant" ? "ai" : "user" }),
+      }),
+    },
+  );
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload.message || "这篇日记没有保存，请稍后再试。");
+  }
+  return payload;
+}
+
+export async function addDiaryComment(entry, content) {
+  const liveId = String(entry?.id || "").match(/^diary-vps-(\d+)$/u)?.[1];
+  if (!liveId) {
+    throw new Error("这篇日记还没有进入共同日记库，请先编辑并保存，再添加评论。");
+  }
+
+  const response = await fetch(`/__serein/live/diaries/${liveId}/comments`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ content }),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload.message || "这条评论没有保存，请稍后再试。");
+  }
+  return payload;
+}
+
+export async function deleteDiaryComment(entry, commentId) {
+  const liveId = String(entry?.id || "").match(/^diary-vps-(\d+)$/u)?.[1];
+  const liveCommentId = String(commentId || "").match(/^diary-comment-vps-(\d+)$/u)?.[1];
+  if (!liveId || !liveCommentId) return { status: "deleted", scope: "local" };
+
+  const response = await fetch(`/__serein/live/diaries/${liveId}/comments/${liveCommentId}`, {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload.message || "这条评论没有删掉，请稍后再试。");
+  }
+  return payload;
+}
+
+export function forgetLocalDiaryEntry(entryId) {
+  if (!entryId || /^diary-vps-\d+$/u.test(entryId)) return;
+  try {
+    const saved = JSON.parse(window.localStorage.getItem(diaryStorageKey));
+    if (!Array.isArray(saved)) return;
+    window.localStorage.setItem(
+      diaryStorageKey,
+      JSON.stringify(saved.filter((entry) => entry?.id !== entryId)),
+    );
+  } catch {
+    // A failed local cleanup must not undo a successful server save.
+  }
+}
+
+export function readDiaryEntries() {
+  try {
+    const saved = JSON.parse(window.localStorage.getItem(diaryStorageKey));
+    if (!Array.isArray(saved)) return defaultDiaryEntries;
+    const userIdentity = readDiaryUserIdentity();
+    const entries = saved.map((entry) => {
+      const seededEntry = defaultDiaryEntries.find((candidate) => candidate.id === entry?.id);
+      return normalizeEntry(entry, seededEntry ?? userIdentity);
+    }).filter(Boolean);
+    if (!entries.length) return defaultDiaryEntries;
+
+    const entryIds = new Set(entries.map((entry) => entry.id));
+    const hasOriginalSeed = entryIds.has("diary-rain-stopped");
+    const supplementalEntries = hasOriginalSeed
+      ? defaultDiaryEntries.filter((entry) => supplementalSeedIds.has(entry.id) && !entryIds.has(entry.id))
+      : [];
+    return [...entries, ...supplementalEntries];
+  } catch {
+    return defaultDiaryEntries;
+  }
+}
+
+export function storeDiaryEntries(entries) {
+  try {
+    window.localStorage.setItem(diaryStorageKey, JSON.stringify(entries));
+  } catch {
+    // Keep the local prototype usable when browser storage is unavailable.
+  }
+}

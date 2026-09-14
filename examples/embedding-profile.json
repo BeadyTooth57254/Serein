@@ -1,0 +1,8 @@
+{
+  "model": "replace-with-your-embedding-model",
+  "provider_host": "embedding.example",
+  "dimension": 1024,
+  "document_instruction": "",
+  "query_instruction": "Retrieve relevant memories for this query",
+  "max_chars": 6000
+}

@@ -1,0 +1,18 @@
+.portrait-reader .window-shadow-reader__topbar > button {
+  border-radius: 0;
+  background: none;
+}
+
+.portrait-reader .portrait-reader__body {
+  position: relative;
+  inset: auto;
+  height: auto;
+  width: 100%;
+  margin-top: 0;
+  outline: none;
+}
+
+.portrait-reader__text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

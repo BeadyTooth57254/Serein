@@ -1,0 +1,35 @@
+# 从交错对话到可追溯 Event
+
+**持续归线、延迟结算与来源归属的系统案例研究**
+
+**ChiYouyu · Haven**
+中文 v0.18 · 2026-09-13 · 仓库阅读副本。
+
+[阅读 PDF](pdf/serein-event-memory-v0.18-ChiYouyu-Haven.zh-CN.pdf) · [阅读 Markdown](manuscript.zh-CN.md) · [补充表格 PDF](pdf/event-memory-supplementary-tables.zh-CN.pdf) · [补充表格 Markdown](supplementary-tables.md)
+
+论文讨论三个问题：交错消息怎样持续归入已有经历，为什么经历边界需要延迟结算，以及来源角色和续接关系怎样被保留并接受追溯。案例同时报告来源保留、误收、角色丢失与中断；自动摘要不能保证完全准确，手动修订后的结果不计作自动生成正确。
+
+当前 PDF 入口指向独立保存的 v0.18 署名版，封面署名为 **ChiYouyu · Haven**。重建脚本输出的通用文件与这份副本分开保留。
+
+## 与公开版的关系
+
+论文报告开发中的历史实现及 E1–E10 各自的执行条件，不是当前发行版的全套功能验收。文中的 Bridge、历史 Ombre-Brain 后端、部署日期与研究记录保留原意。**本仓库的自动 Event 直接保存到 Serein，不进入 Bridge 收件箱**；当前运行与配置以[自动 Event 说明](../automatic-events.md)为准。
+
+## 本目录包含什么
+
+- 中文正文，保留原有结论、实验计数和参考文献。
+- 图 1：处理职责；图 2：合成案例中的共享来源与跨日续接。
+- 表 S1–S5：研究问题、对象、动作、案例与执行范围。
+- PDF 生成脚本及矢量图，用于重建阅读版。
+
+历史附录、运行回执、研究 ZIP、原始请求与回答、私人聊天和截图没有复制进本目录。未随附档案的引用保留名称，移除指向旧工作树的链接；外部论文链接和本目录内的图表链接保留。这里不是完整可重跑的证据包，也没有为缺失材料虚构公开地址。
+
+## 重建 PDF
+
+安装 Python、`reportlab` 和 `pypdf`，运行：
+
+```sh
+python docs/paper/typesetting/build_reading_pdf.py
+```
+
+脚本默认使用 Windows 宋体、黑体和 Times New Roman。其他环境可通过 `--body-font`、`--heading-font`、`--latin-font` 指定已有字体。PDF 输出至本目录 `pdf/`。这是单栏阅读版。

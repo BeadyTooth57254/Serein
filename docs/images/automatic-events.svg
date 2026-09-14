@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="600" height="1020" viewBox="0 0 600 1020" role="img" aria-labelledby="title desc">
+<title id="title">从原话到可续接的 Event</title>
+<desc id="desc">已入库原话经过持续归线、延迟判断和依据原文写作三个模型阶段，由程序检查后直接保存至 Serein。相关 Scene 只供对照；来源和前版关系保留，自动摘要仍需核对。</desc>
+<rect x="0" y="0" width="600" height="1020" rx="20" fill="#f8faf9" stroke="#f8faf9"/>
+<g font-family="Microsoft YaHei, PingFang SC, sans-serif" text-anchor="middle">
+<text x="300" y="46" font-size="28" fill="#243f39">从原话到可续接的 Event</text>
+<rect x="55" y="76" width="490" height="98" rx="14" fill="#ffffff" stroke="#c5d7cf"/>
+<text x="300" y="112" font-size="25" fill="#243f39">已入库原话</text>
+<text x="300" y="147" font-size="20" fill="#52645d">聊天正文与图片 · 保留消息编号</text>
+<path d="M300 174 V212 M294 205 L300 212 L306 205" fill="none" stroke="#72918a" stroke-width="2"/>
+<rect x="55" y="220" width="490" height="124" rx="14" fill="#edf4f1" stroke="#c5d7cf"/>
+<text x="300" y="257" font-size="24" fill="#365b55">01  持续归线 · Track Router</text>
+<text x="300" y="292" font-size="20" fill="#52645d">交错消息归到新建或已有话题线</text>
+<text x="300" y="323" font-size="18" fill="#52645d">可以继续积累，不立即决定 Event 边界</text>
+<path d="M300 344 V382 M294 375 L300 382 L306 375" fill="none" stroke="#72918a" stroke-width="2"/>
+<rect x="55" y="390" width="490" height="150" rx="14" fill="#edf4f1" stroke="#c5d7cf"/>
+<text x="300" y="427" font-size="24" fill="#365b55">02  延迟判断 · Curator</text>
+<text x="300" y="463" font-size="20" fill="#52645d">新建 / 续接 / 合并 / 跳过 / 暂缓</text>
+<text x="300" y="496" font-size="18" fill="#52645d">确定来源归属，读取并转录可用图片</text>
+<text x="300" y="524" font-size="18" fill="#52645d">已有 Event 与 Scene 帮助理解和对照</text>
+<path d="M300 540 V578 M294 571 L300 578 L306 571" fill="none" stroke="#72918a" stroke-width="2"/>
+<rect x="55" y="586" width="490" height="124" rx="14" fill="#f4f1eb" stroke="#d9d1c2"/>
+<text x="300" y="623" font-size="24" fill="#736244">03  依据原文写作 · Writer</text>
+<text x="300" y="659" font-size="20" fill="#52645d">只在确定的来源范围内组织正文</text>
+<text x="300" y="691" font-size="18" fill="#52645d">续接时核读前版与原话，保留重要进展</text>
+<path d="M300 710 V748 M294 741 L300 748 L306 741" fill="none" stroke="#72918a" stroke-width="2"/>
+<rect x="55" y="756" width="490" height="124" rx="14" fill="#ffffff" stroke="#c5d7cf"/>
+<text x="300" y="793" font-size="24" fill="#243f39">程序检查 → 直接保存到 Serein</text>
+<text x="300" y="830" font-size="20" fill="#52645d">正文 · 来源绑定 · 前版与续接关系</text>
+<text x="300" y="861" font-size="18" fill="#52645d">相关的新进展，可在后续整理时接回来</text>
+<text x="300" y="926" font-size="19" fill="#52645d">三个模型阶段，没有独立的证据整理调用</text>
+<text x="300" y="963" font-size="19" fill="#52645d">可以读回原话核对，也可以手动修订</text>
+<text x="300" y="994" font-size="19" fill="#736244">自动摘要不能保证完全准确</text>
+</g>
+</svg>

@@ -1,0 +1,28 @@
+# Optional tasks only start when their matching extensions are enabled in TOML.
+# All provider credentials are environment variables; examples contain no real endpoints.
+identity:
+  ai_name: AI
+  user_name: User
+  user_display_name: 用户
+scene_linker:
+  enabled: true
+  auto_enabled: true
+  models:
+    - name: configured-relations
+      model: your-model
+      base_url: https://models.example/v1
+      api_key_env: SEREIN_SCENE_LINKER_API_KEY
+dream:
+  enabled: true
+  auto_enabled: true
+  model: your-model
+  base_url: https://models.example/v1
+  timezone: UTC
+  # Set SEREIN_DREAM_API_KEY in the host environment.
+narrative_rolls:
+  revision_scan_enabled: true
+  new_roll_scout_enabled: true
+  new_roll_scout_model: your-model
+  new_roll_scout_base_url: https://models.example/v1
+  new_roll_scout_api_key_env: SEREIN_SCOUT_KEY
+  scout_role_file: ../web/codex_agents/narrative_scout/AGENTS.md
