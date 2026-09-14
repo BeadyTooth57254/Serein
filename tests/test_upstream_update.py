@@ -1,11 +1,9 @@
-import hashlib
 import importlib.util
-import io
 import json
 from pathlib import Path
-import stat
 import subprocess
 import types
+from uuid import uuid4
 import zipfile
 
 import pytest
@@ -19,33 +17,28 @@ def updater():
     return module
 
 
-def package(module, *, extra=None, tag='v0.1.0-rc66'):
+def upstream(module, folder, *, extra=None):
+    remote = folder / ('upstream-' + uuid4().hex)
+    remote.mkdir()
     files = {name: b'# synthetic source\n' for name in module.REQUIRED}
-    files['release-version.json'] = json.dumps({'version': tag}).encode()
+    # Version metadata deliberately stays the same across code commits.
+    files['release-version.json'] = json.dumps({'version':'0.1.0-rc65'}).encode()
     files.update(extra or {})
     files['release-files.json'] = json.dumps(sorted(files)).encode()
-    buffer = io.BytesIO()
-    with zipfile.ZipFile(buffer, 'w') as archive:
-        for name, data in files.items():
-            archive.writestr('serein-public/' + name, data)
-    data = buffer.getvalue()
-    name = f'serein-public-{tag[1:]}.zip'
-    sha = hashlib.sha256(data).hexdigest()
-    prefix = f'https://github.com/Yinglianchun/Serein/releases/download/{tag}/'
-    release = {'tag': tag, 'asset': {'name': name, 'browser_download_url': prefix + name,
-                                    'digest': 'sha256:' + sha},
-               'checksum': {'name': name + '.sha256', 'browser_download_url': prefix + name + '.sha256'}}
-    return release, data, f'{sha}  {name}\n'.encode()
+    for name, data in files.items():
+        path = remote / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+    module.git('init', '--quiet', '--template=', '-b', 'main', remote)
+    module.git('-C', remote, '-c', 'core.autocrlf=false', 'add', '.')
+    commit_source(module, remote)
+    module.REMOTE = str(remote)
+    return module.latest_commit()
 
 
-def network(monkeypatch, module, release, data, checksum):
-    def fetch(url, target=None, **kwargs):
-        content = data if url == release['asset']['browser_download_url'] else checksum
-        if target:
-            Path(target).write_bytes(content)
-        else:
-            return content
-    monkeypatch.setattr(module, 'fetch', fetch)
+def commit_source(module, remote):
+    module.git('-C', remote, '-c', 'user.name=Synthetic Tester', '-c', 'user.email=synthetic@example.invalid',
+               'commit', '--quiet', '-m', 'Synthetic source')
 
 
 @pytest.mark.parametrize('bad', ['../outside', '/absolute', 'C:/escape', 'scripts\\escape',
@@ -56,47 +49,44 @@ def test_rejects_private_and_platform_escape_paths(bad):
         updater().safe_name(bad)
 
 
-def test_checksum_failure_does_not_extract(monkeypatch, tmp_path):
+def test_fetches_pinned_commit_when_main_advances(tmp_path):
     module = updater()
-    release, data, checksum = package(module)
-    network(monkeypatch, module, release, data + b'changed', checksum)
-    with pytest.raises(ValueError, match='校验失败'):
-        module.prepare(release, tmp_path)
-    assert not (tmp_path / 'source').exists()
+    commit = upstream(module, tmp_path, extra={'README.md': b'first source'})
+    remote = Path(module.REMOTE)
+    (remote / 'README.md').write_bytes(b'second source')
+    module.git('-C', remote, 'add', 'README.md'); commit_source(module, remote)
+    assert module.latest_commit() != commit
+    staged, names = module.prepare(commit, tmp_path)
+    assert (staged / 'README.md').read_bytes() == b'first source'
+    assert module.git('-C', staged, 'rev-parse', 'HEAD') == commit
+    assert module.git('-C', staged, 'rev-list', '--count', 'HEAD') == '1'
 
 
-@pytest.mark.parametrize('kind', ['extra', 'duplicate', 'symlink', 'case_collision', 'private'])
-def test_rejects_unsafe_archive_even_with_valid_checksum(monkeypatch, tmp_path, kind):
+@pytest.mark.parametrize('kind', ['missing', 'symlink', 'case_collision', 'private'])
+def test_rejects_unsafe_git_source(tmp_path, kind):
     module = updater()
-    release, data, _ = package(module, extra={'README.md': b'synthetic'})
-    buffer = io.BytesIO(data)
-    with zipfile.ZipFile(buffer, 'a') as archive:
-        if kind == 'extra':
-            archive.writestr('serein-public/not-in-manifest', b'x')
-        elif kind == 'duplicate':
-            with pytest.warns(UserWarning):
-                archive.writestr('serein-public/README.md', b'duplicate')
-        else:
-            files = {i.filename: archive.read(i) for i in archive.infolist()}
-            name = {'symlink': 'link', 'case_collision': 'readme.md', 'private': 'deploy/.env'}[kind]
-            files['serein-public/' + name] = b'x'
-            names = json.loads(files['serein-public/release-files.json']) + [name]
-            files['serein-public/release-files.json'] = json.dumps(names).encode()
-    if kind in ('symlink', 'case_collision', 'private'):
-        buffer = io.BytesIO()
-        with zipfile.ZipFile(buffer, 'w') as archive:
-            for name, content in files.items():
-                info = zipfile.ZipInfo(name)
-                if kind == 'symlink' and name.endswith('/link'):
-                    info.create_system = 3
-                    info.external_attr = (stat.S_IFLNK | 0o777) << 16
-                archive.writestr(info, content)
-    data = buffer.getvalue()
-    sha = hashlib.sha256(data).hexdigest()
-    release['asset']['digest'] = 'sha256:' + sha
-    network(monkeypatch, module, release, data, f'{sha}  {release["asset"]["name"]}'.encode())
+    upstream(module, tmp_path, extra={'README.md': b'synthetic'})
+    remote = Path(module.REMOTE)
+    names = json.loads((remote / 'release-files.json').read_text())
+    name = {'missing':'missing.py', 'symlink':'link', 'case_collision':'readme.md', 'private':'deploy/.env'}[kind]
+    names.append(name)
+    (remote / 'release-files.json').write_text(json.dumps(names))
+    module.git('-C', remote, 'add', 'release-files.json')
+    if kind == 'symlink':
+        blob = module.git('-C', remote, 'hash-object', '-w', 'README.md')
+        module.git('-C', remote, 'update-index', '--add', '--cacheinfo', '120000,'+blob+',link')
+    commit_source(module, remote)
     with pytest.raises(ValueError):
-        module.prepare(release, tmp_path)
+        module.prepare(module.latest_commit(), tmp_path)
+
+
+def test_missing_git_is_actionable_without_touching_install(monkeypatch):
+    module = updater()
+    def missing(*args, **kwargs):
+        raise FileNotFoundError('git')
+    monkeypatch.setattr(module.subprocess, 'run', missing)
+    with pytest.raises(ValueError, match='安装 Git'):
+        module.latest_commit()
 
 
 def installation(root):
@@ -117,9 +107,8 @@ def test_apply_preserves_state_and_removes_only_obsolete_manifest_files(monkeypa
     root = tmp_path / 'installed'; root.mkdir()
     installation(root)
     stage = tmp_path / 'stage'; stage.mkdir()
-    release, data, checksum = package(module, extra={'README.md': b'new source'})
-    network(monkeypatch, module, release, data, checksum)
-    staged, names, _ = module.prepare(release, stage)
+    commit = upstream(module, tmp_path, extra={'README.md': b'new source'})
+    staged, names = module.prepare(commit, stage)
     all_names, obsolete = module.plan_files(root, names)
     backup = module.backup_sources(root, all_names)
     module.apply_files(root, staged, names, obsolete, backup)
@@ -139,9 +128,8 @@ def test_failed_file_replacement_restores_all_old_sources(monkeypatch, tmp_path)
     module = updater(); root = tmp_path / 'installed'; root.mkdir()
     files = installation(root)
     stage = tmp_path / 'stage'; stage.mkdir()
-    release, data, checksum = package(module, extra={'README.md': b'new source'})
-    network(monkeypatch, module, release, data, checksum)
-    staged, names, _ = module.prepare(release, stage)
+    commit = upstream(module, tmp_path, extra={'README.md': b'new source'})
+    staged, names = module.prepare(commit, stage)
     all_names, obsolete = module.plan_files(root, names)
     backup = module.backup_sources(root, all_names)
     real = module.replace_file
@@ -162,9 +150,8 @@ def test_failed_file_replacement_restores_all_old_sources(monkeypatch, tmp_path)
 @pytest.mark.parametrize('failure', ['', 'download', 'backup', 'build', 'start'])
 def test_complete_update_order_and_failure_boundaries(monkeypatch, tmp_path, failure):
     module = updater(); installation(tmp_path)
-    release, data, checksum = package(module, extra={'README.md': b'new source'})
-    network(monkeypatch, module, release, data, checksum)
-    monkeypatch.setattr(module, 'latest_release', lambda: release)
+    commit = upstream(module, tmp_path, extra={'README.md': b'new source'})
+    monkeypatch.setattr(module, 'latest_commit', lambda: commit)
     calls = []
     def step(name):
         calls.append(name)
@@ -196,9 +183,23 @@ def test_complete_update_order_and_failure_boundaries(monkeypatch, tmp_path, fai
         assert module.run_update(manager)
         assert calls == ['stop', 'backup', 'build', 'start', 'health']
         state = json.loads((tmp_path / 'deploy/update-state.json').read_text())
-        assert state['phase'] == 'complete'
+        assert state['phase'] == 'complete' and state['commit'] == commit and state['branch'] == 'main'
         calls.clear()
         assert not module.run_update(manager) and calls == []
+        (tmp_path / 'README.md').write_bytes(b'my local edit')
+        with pytest.raises(ValueError, match='被修改'):
+            module.run_update(manager)
+        assert calls == []
+        (tmp_path / 'README.md').write_bytes(b'new source')
+        # Another main commit must update even without a release-version bump.
+        remote = Path(module.REMOTE)
+        (remote / 'README.md').write_bytes(b'next commit source')
+        module.git('-C', remote, 'add', 'README.md'); commit_source(module, remote)
+        commit = module.git('-C', remote, 'rev-parse', 'HEAD')
+        assert module.run_update(manager)
+        assert calls == ['stop', 'backup', 'build', 'start', 'health']
+        assert (tmp_path / 'README.md').read_bytes() == b'next commit source'
+        assert json.loads((tmp_path / 'release-version.json').read_text())['version'] == '0.1.0-rc65'
     assert (tmp_path / 'deploy/runtime/serein.db').read_bytes() == b'keep me'
 
 
@@ -210,18 +211,16 @@ def test_local_file_collision_stops_before_overwrite(tmp_path):
     assert (tmp_path / 'new.py').read_bytes() == b'user file'
 
 
-def test_version_comparison_handles_multi_digit_release_candidates():
-    module = updater()
-    assert module.version('v0.1.0-rc9') < module.version('0.1.0-rc65') < module.version('v0.1.0')
-
-
-def test_latest_rejects_foreign_asset_url(monkeypatch):
-    module = updater(); release, _, _ = package(module)
-    metadata = {'tag_name': release['tag'], 'assets': [release['asset'], release['checksum']]}
-    release['asset']['browser_download_url'] = 'https://example.org/foreign.zip'
-    monkeypatch.setattr(module, 'fetch', lambda *a: json.dumps(metadata).encode())
-    with pytest.raises(ValueError, match='上游仓库'):
-        module.latest_release()
+def test_completed_old_release_does_not_block_main_update(monkeypatch, tmp_path):
+    module = updater(); installation(tmp_path)
+    commit = upstream(module, tmp_path)
+    (tmp_path / 'release-version.json').write_text(json.dumps({'version':'0.1.0-rc65'}))
+    (tmp_path / 'deploy/update-state.json').write_text(json.dumps({'version':'v0.1.0-rc65', 'phase':'complete',
+                                                                  'source_hashes':module.source_hashes(tmp_path)}))
+    choices = []
+    manager = types.SimpleNamespace(ROOT=tmp_path, choose=lambda *a, **kw: choices.append(True) or 'r')
+    assert not module.run_update(manager)
+    assert choices == [True]
 
 
 def test_real_runtime_backup_while_installer_lock_is_held(tmp_path):
@@ -240,9 +239,8 @@ def test_real_runtime_backup_while_installer_lock_is_held(tmp_path):
 @pytest.mark.parametrize('selection', ['r', '0'])
 def test_cancel_and_skip_data_backup(monkeypatch, tmp_path, selection):
     module = updater(); installation(tmp_path)
-    release, data, checksum = package(module)
-    network(monkeypatch, module, release, data, checksum)
-    monkeypatch.setattr(module, 'latest_release', lambda: release)
+    commit = upstream(module, tmp_path)
+    monkeypatch.setattr(module, 'latest_commit', lambda: commit)
     calls = []
     manager = types.SimpleNamespace(ROOT=tmp_path, choose=lambda *a, **kw: selection,
         ensure_tools=lambda: None, service_action=lambda action: calls.append(action),
@@ -255,14 +253,13 @@ def test_cancel_and_skip_data_backup(monkeypatch, tmp_path, selection):
     assert calls == ([] if selection == 'r' else ['stop', 'build', 'up'])
 
 
-def test_interrupted_same_version_can_retry_and_hand_edits_are_preserved(monkeypatch, tmp_path):
+def test_interrupted_same_commit_can_retry_and_hand_edits_are_preserved(monkeypatch, tmp_path):
     module = updater(); installation(tmp_path)
-    release, data, checksum = package(module)
-    network(monkeypatch, module, release, data, checksum)
-    monkeypatch.setattr(module, 'latest_release', lambda: release)
-    (tmp_path / 'release-version.json').write_text(json.dumps({'version': release['tag']}))
-    # A same-version update must not be mistaken for success after a crash.
-    (tmp_path / 'deploy/update-state.json').write_text(json.dumps({'version': release['tag'], 'phase': 'building'}))
+    commit = upstream(module, tmp_path)
+    monkeypatch.setattr(module, 'latest_commit', lambda: commit)
+    (tmp_path / 'release-version.json').write_text(json.dumps({'version': '0.1.0-rc65'}))
+    # A same-commit update must not be mistaken for success after a crash.
+    (tmp_path / 'deploy/update-state.json').write_text(json.dumps({'commit': commit, 'phase': 'building'}))
     calls = []
     manager = types.SimpleNamespace(ROOT=tmp_path, choose=lambda *a, **kw: calls.append('offered-retry') or 'r')
     assert not module.run_update(manager)
@@ -275,29 +272,27 @@ def test_interrupted_same_version_can_retry_and_hand_edits_are_preserved(monkeyp
     assert (tmp_path / 'README.md').read_text() == 'user edited source'
 
 
-def test_real_release_manifest_and_archive_are_accepted(monkeypatch, tmp_path):
-    import sys
-    module = updater(); root = Path(__file__).parents[1]
-    archive = tmp_path / 'review.zip'
-    subprocess.run([sys.executable, str(root / 'scripts/release.py'), str(archive)], check=True)
-    tag = 'v' + json.loads((root / 'release-version.json').read_text())['version']
-    name = f'serein-public-{tag[1:]}.zip'
-    data = archive.read_bytes(); sha = hashlib.sha256(data).hexdigest()
-    release = {'tag': tag, 'asset': {'name': name, 'browser_download_url': 'archive', 'digest': 'sha256:' + sha},
-               'checksum': {'browser_download_url': 'checksum'}}
-    network(monkeypatch, module, release, data, f'{sha}  {name}\n'.encode())
-    staged, names, digest = module.prepare(release, tmp_path)
-    assert digest == sha
-    assert 'web/src/data/memory.js' in names
-    assert (staged / 'scripts/upstream_update.py').read_bytes() == (root / 'scripts/upstream_update.py').read_bytes()
+def test_git_only_files_are_not_copied_into_install(tmp_path):
+    module = updater()
+    commit = upstream(module, tmp_path)
+    remote = Path(module.REMOTE)
+    (remote / 'development-only.txt').write_text('not in install manifest')
+    module.git('-C', remote, 'add', 'development-only.txt'); commit_source(module, remote)
+    staged, names = module.prepare(module.latest_commit(), tmp_path)
+    root = tmp_path / 'installed'; root.mkdir(); installation(root)
+    all_names, obsolete = module.plan_files(root, names)
+    backup = module.backup_sources(root, all_names)
+    module.apply_files(root, staged, names, obsolete, backup)
+    assert not (root / '.git').exists()
+    assert not (root / 'development-only.txt').exists()
+    assert (root / 'deploy/runtime/serein.db').read_bytes() == b'keep me'
 
 
 def test_power_loss_during_replacement_can_resume_without_accepting_other_edits(monkeypatch, tmp_path):
     module = updater(); root = tmp_path / 'installed'; root.mkdir(); installation(root)
     stage = tmp_path / 'stage'; stage.mkdir()
-    release, data, checksum = package(module, extra={'README.md': b'new source'})
-    network(monkeypatch, module, release, data, checksum)
-    staged, names, _ = module.prepare(release, stage)
+    commit = upstream(module, tmp_path, extra={'README.md': b'new source'})
+    staged, names = module.prepare(commit, stage)
     before = module.source_hashes(root)
     (root / 'deploy/update-state.json').write_text(json.dumps({'phase': 'applying', 'source_hashes': before}))
     # Simulate an OS kill after some files, including the manifest, were replaced.

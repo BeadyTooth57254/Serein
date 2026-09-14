@@ -1,4 +1,4 @@
-"""Fetch reviewed GitHub releases without depending on repository history."""
+"""Pull the public main branch with Git and rebuild the existing installation."""
 import hashlib
 import json
 import os
@@ -7,94 +7,57 @@ import re
 import stat
 import subprocess
 import tempfile
-import time
 import types
-import urllib.error
-import urllib.request
 from uuid import uuid4
 import zipfile
 
 REPOSITORY = 'Yinglianchun/Serein'
-API = f'https://api.github.com/repos/{REPOSITORY}/releases/latest'
-MAX_ARCHIVE = 100 * 1024 * 1024
-MAX_EXPANDED = 300 * 1024 * 1024
-REQUIRED = {'release-files.json', 'release-version.json', 'scripts/manage.py',
+REMOTE = f'https://github.com/{REPOSITORY}.git'
+BRANCH = 'main'
+MAX_SOURCE_BYTES = 300 * 1024 * 1024
+REQUIRED = {'release-files.json', 'scripts/manage.py',
             'scripts/upstream_update.py', 'scripts/runtime_backup.py', 'scripts/one_click.sh', 'scripts/one_click.ps1'}
 DENIED = {'.git', '.env', '.local', '.runtime', '.venv', 'node_modules', '__pycache__',
           'runtime', 'secrets', 'backups', 'output', 'config.toml', 'installation.json'}
 
 
-def version(value):
-    match = re.fullmatch(r'v?(\d+)\.(\d+)\.(\d+)(?:-rc(\d+))?', value or '')
-    if not match:
-        raise ValueError('上游版本号格式不支持')
-    major, minor, patch, rc = match.groups()
-    return int(major), int(minor), int(patch), 1 if rc is None else 0, int(rc or 0)
-
-
-def fetch(url, target=None, *, limit=1024 * 1024):
-    request = urllib.request.Request(url, headers={'User-Agent': 'Serein-Updater',
-                                                  'Accept': 'application/vnd.github+json'})
+def git(*args):
     try:
-        with urllib.request.urlopen(request, timeout=30) as response:
-            if not response.url.startswith('https://'):
-                raise ValueError('上游下载必须使用 HTTPS')
-            total = 0
-            chunks = []
-            started = time.monotonic()
-            handle = Path(target).open('wb') if target else None
-            try:
-                while True:
-                    chunk = response.read(1024 * 1024)
-                    if not chunk:
-                        break
-                    total += len(chunk)
-                    if total > limit or time.monotonic() - started > 300:
-                        raise ValueError('上游下载过大或超过五分钟，请稍后重试')
-                    if handle:
-                        handle.write(chunk)
-                    else:
-                        chunks.append(chunk)
-            finally:
-                if handle:
-                    handle.close()
-        return b''.join(chunks) if target is None else total
-    except urllib.error.HTTPError as exc:
-        raise ValueError(f'无法读取 GitHub 发行包（HTTP {exc.code}）；请检查网络或稍后重试') from exc
-    except urllib.error.URLError as exc:
-        raise ValueError('无法连接 GitHub；当前服务和源码尚未更新') from exc
+        result = subprocess.run(['git', *map(str, args)], check=True, capture_output=True, timeout=300,
+                                env={**os.environ, 'GIT_TERMINAL_PROMPT': '0', 'GCM_INTERACTIVE': 'never'})
+        return result.stdout.decode('utf-8').strip()
+    except FileNotFoundError as exc:
+        raise ValueError('更新需要 Git，请先安装 Git 后重试') from exc
+    except subprocess.TimeoutExpired as exc:
+        raise ValueError('Git 拉取超时，当前服务和源码尚未更新') from exc
+    except subprocess.CalledProcessError as exc:
+        detail = (exc.stderr or b'').decode('utf-8', errors='replace').strip()
+        raise ValueError('Git 拉取未完成：' + detail) from exc
 
 
-def latest_release():
-    release = json.loads(fetch(API))
-    tag = release.get('tag_name', '')
-    version(tag)
-    if release.get('draft') or release.get('prerelease'):
-        raise ValueError('上游尚未提供正式发布的安装包')
-    filename = f'serein-public-{tag.removeprefix("v")}.zip'
-    assets = {item['name']: item for item in release.get('assets', [])}
-    if filename not in assets or filename + '.sha256' not in assets:
-        raise ValueError('最新发行缺少安装包或 SHA-256 校验文件，未开始更新')
-    prefix = f'https://github.com/{REPOSITORY}/releases/download/{tag}/'
-    for name in (filename, filename + '.sha256'):
-        if assets[name].get('browser_download_url') != prefix + name:
-            raise ValueError('发行附件地址不属于配置的上游仓库')
-    return {'tag': tag, 'asset': assets[filename], 'checksum': assets[filename + '.sha256']}
+def latest_commit():
+    ref = 'refs/heads/' + BRANCH
+    rows = git('ls-remote', '--exit-code', REMOTE, ref).splitlines()
+    for row in rows:
+        parts = row.split()
+        if len(parts) == 2 and parts[1] == ref and re.fullmatch(r'[0-9a-f]{40}', parts[0]):
+            return parts[0]
+    raise ValueError('无法确定上游 main 的提交，未开始更新')
 
 
 def safe_name(name):
     if not isinstance(name, str) or not name or '\\' in name or ':' in name:
-        raise ValueError('发行清单含无效路径')
+        raise ValueError('源码清单含无效路径')
     path = PurePosixPath(name)
     if path.is_absolute() or any(p in ('', '.', '..') for p in name.split('/')):
-        raise ValueError('发行清单含越界路径')
+        raise ValueError('源码清单含越界路径')
     if any(p.endswith(('.', ' ')) or re.search(r'[\x00-\x1f<>"|?*]', p) or
            re.fullmatch(r'(?i)(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\..*)?', p) for p in path.parts):
-        raise ValueError('发行清单含不兼容的文件名')
+        raise ValueError('源码清单含不兼容的文件名')
     if path.parts[0].lower() == 'data' or any(p.lower() in DENIED for p in path.parts) or path.suffix.lower() in ('.db', '.sqlite', '.sqlite3', '.log'):
-        raise ValueError('发行清单包含实例数据或配置')
+        raise ValueError('源码清单包含实例数据或配置')
     if path.parts[0] == 'deploy' and name not in ('deploy/compose.yaml', 'deploy/Gateway.Dockerfile'):
-        raise ValueError('发行清单包含未允许的部署文件')
+        raise ValueError('源码清单包含未允许的部署文件')
     return name
 
 
@@ -107,53 +70,53 @@ def destination(root, name):
     for part in PurePosixPath(name).parts:
         current = current / part
         if current.is_symlink() or current.resolve() != current:
-            raise ValueError('发行目标含符号链接或目录联接：' + name)
+            raise ValueError('源码目标含符号链接或目录联接：' + name)
     if not target.resolve().is_relative_to(root):
-        raise ValueError('发行目标超出当前目录')
+        raise ValueError('源码目标超出当前目录')
     return target
 
 
 def manifest(content):
     names = json.loads(content)
     if not isinstance(names, list) or not names or len(names) > 10000:
-        raise ValueError('发行清单格式无效')
+        raise ValueError('源码清单格式无效')
     names = [safe_name(name) for name in names]
     if len({name.casefold() for name in names}) != len(names):
-        raise ValueError('发行清单包含重复或大小写冲突路径')
+        raise ValueError('源码清单包含重复或大小写冲突路径')
     return names
 
 
-def prepare(release, folder):
-    folder = Path(folder)
-    archive_path = folder / 'release.zip'
-    fetch(release['asset']['browser_download_url'], archive_path, limit=MAX_ARCHIVE)
-    checksum = fetch(release['checksum']['browser_download_url'], limit=4096).decode('ascii').strip().split()
-    actual = hashlib.sha256(archive_path.read_bytes()).hexdigest()
-    if len(checksum) != 2 or checksum[1].lstrip('*') != release['asset']['name'] or checksum[0].lower() != actual:
-        raise ValueError('安装包 SHA-256 校验失败，当前服务和源码未改动')
-    if release['asset'].get('digest') not in (None, 'sha256:' + actual):
-        raise ValueError('安装包与 GitHub 附件摘要不一致')
-    staged = folder / 'source'
-    staged.mkdir()
-    with zipfile.ZipFile(archive_path) as archive:
-        infos = archive.infolist()
-        if sum(info.file_size for info in infos) > MAX_EXPANDED or len(infos) > 10000:
-            raise ValueError('发行包展开后过大')
-        names = manifest(archive.read('serein-public/release-files.json'))
-        expected = {'serein-public/' + name for name in names}
-        if len(infos) != len(expected) or {info.filename for info in infos} != expected or not REQUIRED.issubset(names):
-            raise ValueError('安装包内容与发行清单不一致')
-        metadata = json.loads(archive.read('serein-public/release-version.json'))
-        if version(metadata.get('version', '')) != version(release['tag']):
-            raise ValueError('安装包版本与发行标签不一致')
-        for info in infos:
-            if stat.S_ISLNK(info.external_attr >> 16):
-                raise ValueError('发行包不能包含符号链接')
-            target = destination(staged, info.filename.removeprefix('serein-public/'))
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(archive.read(info))
-            target.chmod(0o755 if (info.external_attr >> 16) & 0o111 else 0o644)
-    return staged, names, actual
+def prepare(commit, folder):
+    if not re.fullmatch(r'[0-9a-f]{40}', commit or ''):
+        raise ValueError('上游提交编号无效')
+    staged = Path(folder) / 'source'
+    git('init', '--quiet', '--template=', staged)
+    # A fresh shallow fetch also works for extracted installs and rewritten
+    # public history. Never merge old checkout history into the running source.
+    git('-C', staged, '-c', 'fetch.fsckObjects=true', 'fetch', '--quiet', '--depth=1', REMOTE, commit)
+    git('-C', staged, '-c', 'core.autocrlf=false', 'checkout', '--quiet', '--detach', 'FETCH_HEAD')
+    if git('-C', staged, 'rev-parse', 'HEAD') != commit:
+        raise ValueError('拉取的代码与选定提交不一致')
+    modes = {}
+    for entry in git('-C', staged, 'ls-tree', '-r', '-z', '--full-tree', 'HEAD').split('\0'):
+        if entry:
+            metadata, name = entry.split('\t', 1)
+            modes[name] = metadata.split()[0]
+    if modes.get('release-files.json') not in ('100644', '100755'):
+        raise ValueError('上游源码缺少普通文件形式的源码清单')
+    names = manifest((staged / 'release-files.json').read_text(encoding='utf-8'))
+    if not REQUIRED.issubset(names):
+        raise ValueError('上游源码清单缺少更新所需文件')
+    total = 0
+    for name in names:
+        if modes.get(name) not in ('100644', '100755'):
+            raise ValueError('源码清单包含未跟踪文件、链接或子模块：' + name)
+        source = destination(staged, name)
+        total += source.stat().st_size
+        if total > MAX_SOURCE_BYTES:
+            raise ValueError('上游源码过大，未开始更新')
+        source.chmod(0o755 if modes[name] == '100755' else 0o644)
+    return staged, names
 
 
 def plan_files(root, names, staged=None):
@@ -169,7 +132,7 @@ def plan_files(root, names, staged=None):
     for name in all_names:
         target = destination(root, name)
         if target.exists() and not target.is_file():
-            raise ValueError('发行目标不是普通文件：' + name)
+            raise ValueError('源码目标不是普通文件：' + name)
         if target.exists() and name not in old_names and not interrupted:
             raise ValueError('新版文件与本地自建文件重名，请先移开：' + name)
     if interrupted:
@@ -183,7 +146,7 @@ def plan_files(root, names, staged=None):
                 raise ValueError('中断更新的源码包含额外修改，请先保存：' + name)
     elif managed:
         if managed != source_hashes(root):
-            raise ValueError('发行源码在上次更新后被修改，请先保存；未覆盖本地源码')
+            raise ValueError('安装源码在上次更新后被修改，请先保存；未覆盖本地源码')
     elif (root / '.git').exists():
         dirty = subprocess.check_output(['git', '-C', str(root), 'status', '--porcelain', '--untracked-files=no'])
         if dirty.strip():
@@ -270,30 +233,27 @@ def run_update(manager):
     root = Path(manager.ROOT).resolve()
     if not (root / 'deploy' / 'config.toml').is_file():
         raise ValueError('请先部署当前实例，再检查上游更新')
-    release = latest_release()
-    local_path = root / 'release-version.json'
-    current = json.loads(local_path.read_text())['version'] if local_path.exists() else ''
+    commit = latest_commit()
     state_path = root / 'deploy' / 'update-state.json'
     previous = json.loads(state_path.read_text()) if state_path.exists() else {}
-    retry = previous.get('phase') in ('prepared', 'applying', 'building', 'starting', 'failed') and previous.get('version') == release['tag']
-    print(f'当前版本：{current or "旧发行包（未记录版本）"}；上游最新：{release["tag"]}')
-    if current and (version(current) > version(release['tag']) or version(current) == version(release['tag']) and not retry):
-        print('当前已是此版本或更新版本，无须重复下载和构建。')
+    current = previous.get('commit', '')
+    print(f'当前提交：{current[:12] if current else "尚未记录（首次接入 Git 更新）"}；main 最新：{commit[:12]}')
+    if current == commit and previous.get('phase') == 'complete':
+        if previous.get('source_hashes') != source_hashes(root):
+            raise ValueError('源码在上次更新后被修改，请先保存；未覆盖本地源码')
+        print('当前已是 main 最新提交，无须重复拉取和构建。')
         return False
-    choice = manager.choose('下载并更新上游版本', [('1', '先备份再更新（默认）'),
+    choice = manager.choose('拉取 main 代码并重建', [('1', '先备份再更新（默认）'),
                             ('0', '跳过数据备份直接更新')], default='1', back=True)
     if choice == 'r':
         return False
     manager.ensure_tools()
-    print('下载并校验新版安装包；这一阶段保持当前服务运行。', flush=True)
+    print('用 Git 拉取 main 代码；这一阶段保持当前服务运行。', flush=True)
     with tempfile.TemporaryDirectory(prefix='serein-update-') as temporary:
-        try:
-            staged, names, sha256 = prepare(release, temporary)
-        except (zipfile.BadZipFile, KeyError) as exc:
-            raise ValueError('安装包结构不完整或已损坏；当前服务和源码未改动') from exc
+        staged, names = prepare(commit, temporary)
         all_names, obsolete = plan_files(root, names, staged)
         backup = backup_sources(root, all_names)
-        state = {'version': release['tag'], 'sha256': sha256, 'source_backup': str(backup)}
+        state = {'commit': commit, 'branch': BRANCH, 'repository': REPOSITORY, 'source_backup': str(backup)}
         def record(phase):
             state['phase'] = phase
             manager.private_file(state_path, json.dumps({**state, 'source_hashes': source_hashes(root)}))
@@ -323,14 +283,14 @@ def run_update(manager):
             print('更新未完成。源码备份：' + str(backup) + '；数据备份（如选择）在 deploy/backups。')
             print('请查看错误后重试更新；构建失败不会自动启动半更新服务。', flush=True)
             raise
-    print('上游更新完成：' + release['tag'] + '。重新输入 se 可打开新版管理菜单。')
+    print('上游更新完成：main @ ' + commit[:12] + '。重新输入 se 可打开新版管理菜单。')
     return True
 
 
 def main(argv=None):
     import argparse
     parser = argparse.ArgumentParser(description='在原安装目录内接入或运行 Serein 上游更新')
-    parser.add_argument('--root', type=Path, required=True, help='已有实例的发行目录（包含 deploy 和 scripts）')
+    parser.add_argument('--root', type=Path, required=True, help='已有实例的安装目录（包含 deploy 和 scripts）')
     args = parser.parse_args(argv)
     root = args.root.expanduser().resolve()
     try:
