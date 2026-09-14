@@ -176,7 +176,7 @@ def run(settings,identifier):
                 migration.mark('all','vectors','done',{'reuse':reuse,'preparation':result})
             if checkpoint('cue_bindings'):return {'status':'paused'}
             migration.freeze_configuration()
-            report=asyncio.run(refresh(effective_settings(settings)))
+            report=asyncio.run(refresh(effective_settings(settings), retry_failed=True))
             if report['cues'].get('failed_scenes'):raise ValueError('部分 cue passage 绑定失败，可继续重试')
             migration.mark('all','cue_bindings','done',report)
             return {'status':'completed','stages':migration.report()}

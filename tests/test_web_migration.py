@@ -53,7 +53,9 @@ def test_web_migration_preview_confirm_queue_resume_and_backup(api,monkeypatch,t
         'assignments':{'operit_tagging':'test','embedding':'test'}})
     calls=[]
     async def tag(self,item,feedback=''):calls.append(item['old_id'])
-    async def refresh(*args):return {'cues':{'failed_scenes':[]}}
+    async def refresh(*args, **kwargs):
+        assert kwargs['retry_failed'] is True
+        return {'cues':{'failed_scenes':[]}}
     monkeypatch.setattr('serein.legacy_migration.workflow.Migration.tag',tag)
     monkeypatch.setattr('serein.configured_models.prepare_selected',lambda *args,**kwargs:{'status':'ready'})
     monkeypatch.setattr('serein.configured_models.effective_settings',lambda s:s)
@@ -113,7 +115,9 @@ def test_pause_between_items_and_resume_after_page_refresh(api,monkeypatch):
         if len(calls)==1:
             from serein.work_tasks import pause
             pause(settings.database,key)
-    async def refresh(*args):return {'cues':{'failed_scenes':[]}}
+    async def refresh(*args, **kwargs):
+        assert kwargs['retry_failed'] is True
+        return {'cues':{'failed_scenes':[]}}
     monkeypatch.setattr('serein.legacy_migration.workflow.Migration.tag',tag)
     monkeypatch.setattr('serein.configured_models.prepare_selected',lambda *args,**kwargs:{'status':'ready'})
     monkeypatch.setattr('serein.configured_models.effective_settings',lambda s:s)

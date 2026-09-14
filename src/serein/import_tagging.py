@@ -155,7 +155,8 @@ async def run(settings):
             if memory_ready(settings):
                 from .recall.legacy_indexes import refresh
                 report=await refresh(effective_settings(settings))
-                if report['cues'].get('failed_scenes'):
-                    logging.getLogger(__name__).warning('Cue passage binding failed; will retry')
+                new_failures = set(report['cues'].get('failed_scenes', [])) - set(report['cues'].get('paused_scenes', []))
+                if new_failures:
+                    logging.getLogger(__name__).warning('%d cue passage bindings paused until source changes or explicit retry', len(new_failures))
         except Exception:logging.getLogger(__name__).exception('Import metadata tagging remains pending')
         await asyncio.sleep(15)

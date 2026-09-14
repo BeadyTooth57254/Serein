@@ -75,6 +75,7 @@ class DeepSeekCuePassageBinder:
                 api_key=self.api_key,
                 base_url=self.base_url,
                 timeout=self.timeout,
+                max_retries=0,
             )
             if self.ready
             else None
@@ -184,6 +185,12 @@ class CuePassageShadowIndex:
                     bound_count INTEGER NOT NULL,
                     binding_model TEXT NOT NULL,
                     updated_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS memory_cue_passage_attempts (
+                    scene_id TEXT PRIMARY KEY,
+                    source_hash TEXT NOT NULL,
+                    error TEXT NOT NULL,
+                    attempted_at TEXT NOT NULL
                 );
                 """
             )
@@ -314,37 +321,65 @@ class CuePassageShadowIndex:
         passages_by_owner: dict[tuple[str, str], list[dict[str, Any]]],
         dry_run: bool = False,
         refresh_all: bool = False,
+        retry_failed: bool = False,
     ) -> dict[str, Any]:
         normalized = self._normalize_scenes(scenes, passages_by_owner)
         existing: dict[str, sqlite3.Row] = {}
+        attempts: dict[str, sqlite3.Row] = {}
         if os.path.exists(self.db_path):
             with closing(self._connect()) as conn:
                 for row in conn.execute("SELECT * FROM memory_cue_passage_scene_state"):
                     existing[str(row["scene_id"])] = row
+                if conn.execute("SELECT 1 FROM sqlite_master WHERE name='memory_cue_passage_attempts'").fetchone():
+                    for row in conn.execute("SELECT * FROM memory_cue_passage_attempts"):
+                        attempts[str(row["scene_id"])] = row
 
         desired_ids = {str(item["scene_id"]) for item in normalized}
         stale_ids = sorted(set(existing) - desired_ids)
-        plans: list[tuple[dict[str, Any], str, bool]] = []
+        plans: list[tuple[dict[str, Any], str, bool, bool]] = []
         for scene in normalized:
             source_hash = self._source_hash(**scene)
             state = existing.get(str(scene["scene_id"]))
             reusable = bool(state) and not refresh_all and (
                 str(state["source_hash"]) == source_hash
             )
-            plans.append((scene, source_hash, reusable))
+            previous = attempts.get(str(scene["scene_id"]))
+            paused = bool(previous) and not (refresh_all or retry_failed) and (
+                str(previous["source_hash"]) == source_hash
+            ) and not reusable
+            plans.append((scene, source_hash, reusable, paused))
         if dry_run:
             return {
                 "status": "dry_run",
                 "scenes": len(normalized),
                 "cues": sum(len(scene["cues"]) for scene in normalized),
-                "to_bind": sum(1 for _scene, _hash, reusable in plans if not reusable),
-                "reused_scenes": sum(1 for _scene, _hash, reusable in plans if reusable),
+                "to_bind": sum(1 for _scene, _hash, reusable, paused in plans if not reusable and not paused),
+                "reused_scenes": sum(1 for _scene, _hash, reusable, _paused in plans if reusable),
+                "paused_scenes": sum(1 for _scene, _hash, _reusable, paused in plans if paused),
                 "stale_scenes": len(stale_ids),
             }
         if not getattr(self.embedding_engine, "enabled", False):
             raise RuntimeError("embedding_engine_disabled")
 
         self._init_db()
+        # Claim before a provider request. Competing workers and restarts must
+        # not turn an unknown billing outcome into another automatic call.
+        claimed = []
+        with closing(self._connect()) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            for scene, source_hash, reusable, paused in plans:
+                if reusable or paused:
+                    continue
+                old = conn.execute("SELECT source_hash FROM memory_cue_passage_attempts WHERE scene_id=?",
+                                   (scene["scene_id"],)).fetchone()
+                if old and old[0] == source_hash and not (refresh_all or retry_failed):
+                    continue
+                conn.execute("INSERT INTO memory_cue_passage_attempts(scene_id,source_hash,error,attempted_at) "
+                             "VALUES (?,?,?,?) ON CONFLICT(scene_id) DO UPDATE SET "
+                             "source_hash=excluded.source_hash,error=excluded.error,attempted_at=excluded.attempted_at",
+                             (scene["scene_id"], source_hash, "interrupted", _now()))
+                claimed.append((scene, source_hash))
+            conn.commit()
         semaphore = asyncio.Semaphore(self.concurrency)
 
         async def build_scene(
@@ -388,8 +423,7 @@ class CuePassageShadowIndex:
 
         pending = [
             build_scene(scene, source_hash)
-            for scene, source_hash, reusable in plans
-            if not reusable
+            for scene, source_hash in claimed
         ]
         results = await asyncio.gather(*pending)
         by_scene = {result[0]: result for result in results}
@@ -398,10 +432,15 @@ class CuePassageShadowIndex:
         written = 0
         unbound = 0
         with closing(self._connect()) as conn:
-            for scene, source_hash, reusable in plans:
-                if reusable:
+            conn.execute("BEGIN IMMEDIATE")
+            for scene, source_hash, reusable, paused in plans:
+                if reusable or paused or scene["scene_id"] not in by_scene:
                     continue
                 scene_id = str(scene["scene_id"])
+                claim = conn.execute("SELECT source_hash FROM memory_cue_passage_attempts WHERE scene_id=?",
+                                     (scene_id,)).fetchone()
+                if not claim or claim[0] != source_hash:
+                    continue  # A newer source claimed this Scene while the model was running.
                 _id, _hash, bindings, binding_invalid, error = by_scene[scene_id]
                 conn.execute(
                     "DELETE FROM memory_cue_passage_embeddings WHERE scene_id=?",
@@ -412,8 +451,11 @@ class CuePassageShadowIndex:
                     (scene_id,),
                 )
                 if error:
+                    conn.execute("UPDATE memory_cue_passage_attempts SET error=?,attempted_at=? WHERE scene_id=?",
+                                 (error, _now(), scene_id))
                     failed.append(f"{scene_id}:{error}")
                     continue
+                conn.execute("DELETE FROM memory_cue_passage_attempts WHERE scene_id=?", (scene_id,))
                 if binding_invalid:
                     invalid[scene_id] = binding_invalid
                 unbound += max(0, len(scene["cues"]) - len(bindings))
@@ -476,15 +518,21 @@ class CuePassageShadowIndex:
                     "DELETE FROM memory_cue_passage_scene_state WHERE scene_id=?",
                     (scene_id,),
                 )
+            for scene_id in set(attempts) - desired_ids:
+                conn.execute("DELETE FROM memory_cue_passage_attempts WHERE scene_id=? AND source_hash=?",
+                             (scene_id, attempts[scene_id]["source_hash"]))
             conn.commit()
+        paused_failures = [f"{scene['scene_id']}:{attempts[scene['scene_id']]['error']}"
+                           for scene, _hash, _reusable, paused in plans if paused]
         return {
-            "status": "partial" if failed or invalid else "ok",
+            "status": "partial" if failed or paused_failures or invalid else "ok",
             "scenes": len(normalized),
             "cues": sum(len(scene["cues"]) for scene in normalized),
             "bound": written,
             "unbound": unbound,
-            "reused_scenes": sum(1 for _scene, _hash, reusable in plans if reusable),
-            "failed_scenes": failed,
+            "reused_scenes": sum(1 for _scene, _hash, reusable, _paused in plans if reusable),
+            "failed_scenes": failed + paused_failures,
+            "paused_scenes": paused_failures,
             "invalid_bindings": invalid,
             "removed_scenes": len(stale_ids),
             "decision_applied": False,

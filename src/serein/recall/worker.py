@@ -35,8 +35,8 @@ def update_pending(settings, *, client=None):
         import asyncio
         from .legacy_indexes import refresh
         report=asyncio.run(refresh(settings))
-        if report['cues'].get('failed_scenes'):
-            raise RuntimeError('Cue binding failed; retaining pending owners')
+        # Failed cue bindings have their own durable attempt record. The other
+        # index updates succeeded, so retaining this outbox would poll forever.
     with Store(settings.database) as store:
         # Writes received during model requests stay queued for the next cycle.
         store.conn.execute('DELETE FROM index_outbox WHERE sequence<=?',(rows[-1]['sequence'],))

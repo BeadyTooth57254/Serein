@@ -247,7 +247,9 @@ def test_web_workflow_imports_history_before_model_stages(history_source, target
     async def tag(self):
         assert Diaries(target.database).read(diary_id=1)['diaries'][0]['content'] == 'Revised diary'
     async def edges(self): pass
-    async def refresh(*args): return {'cues':{}}
+    async def refresh(*args, **kwargs):
+        assert kwargs['retry_failed'] is True
+        return {'cues':{}}
     monkeypatch.setattr(Migration, 'tag_all', tag)
     monkeypatch.setattr(Migration, 'edges', edges)
     monkeypatch.setattr('serein.configured_models.prepare_selected', lambda *a,**kw: {})

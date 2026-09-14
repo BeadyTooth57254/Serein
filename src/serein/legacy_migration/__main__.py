@@ -139,7 +139,7 @@ def main():
                 migration.mark('all','vectors','done',{'reuse':reuse,'preparation':report})
             asyncio.run(migration.edges())
             from ..recall.legacy_indexes import refresh
-            cue_report=asyncio.run(refresh(effective_settings(settings)))
+            cue_report=asyncio.run(refresh(effective_settings(settings), retry_failed=True))
             if cue_report['cues'].get('failed_scenes'):raise ValueError('部分 cue passage 绑定失败，可继续重试')
             migration.mark('all','cue_bindings','done',cue_report)
             print(json.dumps({'status':'complete','stages':migration.report(),'vectors':reuse,'report_dir':str(migration.root)},ensure_ascii=False,indent=2))

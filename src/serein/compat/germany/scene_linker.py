@@ -2096,7 +2096,8 @@ class SceneLinker:
             client = clients.get(name)
             if client is None and model and base_url and api_key:
                 from openai import AsyncOpenAI
-                client = AsyncOpenAI(api_key=api_key, base_url=base_url, timeout=float(raw.get("timeout_seconds", 60.0)))
+                client = AsyncOpenAI(api_key=api_key, base_url=base_url,
+                                     timeout=float(raw.get("timeout_seconds", 60.0)), max_retries=0)
             token_parameter = str(raw.get("token_parameter") or "max_tokens").strip()
             if token_parameter not in {"max_tokens", "max_completion_tokens"}:
                 token_parameter = "max_tokens"

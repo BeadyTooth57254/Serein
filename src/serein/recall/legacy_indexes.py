@@ -65,7 +65,7 @@ def cue_index(settings, *, writable=False, profile=None):
     return CuePassageShadowIndex(cfg,Embedding(),binder=binder)
 
 
-async def refresh(settings, *, dry_run=False):
+async def refresh(settings, *, dry_run=False, retry_failed=False):
     from .policy import RecallPolicy
     from ..configured_models import recall_settings
     passages_enabled = RecallPolicy.from_config(recall_settings(settings)).passages_enabled
@@ -90,7 +90,8 @@ async def refresh(settings, *, dry_run=False):
         return {'lexical':lexical,'cues':{'status':'disabled'},'canonical_writes':0}
     cues=cue_index(settings,writable=not dry_run)
     try:
-        cue_result=await cues.sync(scenes=scenes,passages_by_owner=passages,dry_run=dry_run)
+        cue_result=await cues.sync(scenes=scenes,passages_by_owner=passages,
+                                   dry_run=dry_run,retry_failed=retry_failed)
     finally:
         if getattr(cues.binder,'client',None):await cues.binder.client.close()
     return {'lexical':lexical,'cues':cue_result,'canonical_writes':0}
