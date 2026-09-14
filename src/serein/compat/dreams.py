@@ -33,6 +33,21 @@ class Dreams(DreamEngine):
             from ..model_runtime import TaskClient
             self.client=TaskClient(settings.database,'dreams')
 
+    def _claim_generation_attempt(self, date_key, *, force=False):
+        # Serialize competing workers before recording the first request of the day.
+        with Store(self.database) as store:
+            store.conn.execute('BEGIN IMMEDIATE')
+            existing = store.conn.execute(
+                "SELECT 1 FROM historical_work_events WHERE event IN "
+                "('generation_started','generated','probability_skipped') "
+                "AND json_extract(metadata_json,'$.local_date')=? LIMIT 1", (date_key,)).fetchone()
+            if existing and not force:
+                return False
+            self.log_event(store, 'generation_started', {
+                'local_date': date_key, 'started_at': now(), 'manual': force})
+            store.conn.commit()
+        return True
+
     @staticmethod
     def record(row):
         return DreamRecord(json.loads(row['metadata_json']), row['body_md'], Path(row['id']))

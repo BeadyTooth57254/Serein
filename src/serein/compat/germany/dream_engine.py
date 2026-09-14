@@ -102,7 +102,7 @@ class DreamEngine:
         self.client = None
         if self.enabled and self.api_key and self.base_url:
             from openai import AsyncOpenAI
-            self.client = AsyncOpenAI(api_key=self.api_key, base_url=self.base_url, timeout=60.0)
+            self.client = AsyncOpenAI(api_key=self.api_key, base_url=self.base_url, timeout=60.0, max_retries=0)
 
     def _now(self, now: datetime | None=None) -> datetime:
         dt = now or datetime.now(self.tz)
@@ -123,9 +123,17 @@ class DreamEngine:
         if self._record_for_date(date_key):
             return 'generated'
         for event in self._read_events():
-            if event.get('event') == 'probability_skipped' and event.get('local_date') == date_key:
+            if event.get('local_date') != date_key:
+                continue
+            if event.get('event') == 'generation_started':
+                return 'attempted'
+            if event.get('event') == 'probability_skipped':
                 return 'probability_miss'
         return ''
+
+    def _claim_generation_attempt(self, date_key: str, *, force: bool=False) -> bool:
+        self._log_event('generation_started', {'local_date': date_key, 'manual': force})
+        return True
 
     def _bucket_created_local(self, bucket: dict) -> datetime | None:
         meta = bucket.get('metadata', {}) or {}
@@ -490,6 +498,8 @@ class DreamEngine:
             decision = self._daily_decision_for_date(date_key)
             if decision == 'generated':
                 return {'status': 'exists', 'date': date_key}
+            if decision == 'attempted':
+                return {'status': 'skipped', 'reason': 'daily_attempt_already_started', 'date': date_key}
             if decision == 'probability_miss':
                 return {'status': 'skipped', 'reason': 'daily_probability_already_missed', 'date': date_key}
         materials = await self.select_materials(bucket_mgr, now_local)
@@ -501,6 +511,10 @@ class DreamEngine:
                 decided_at = now_local.astimezone(timezone.utc).isoformat(timespec='seconds')
                 self._log_event('probability_skipped', {'local_date': date_key, 'decided_at': decided_at, 'probability': self.daily_probability, 'roll': round(roll, 4), 'material_count': len(materials)})
                 return {'status': 'skipped', 'reason': 'daily_probability_miss', 'date': date_key, 'probability': self.daily_probability}
+        # Persist before the paid request: failures and interrupted requests must
+        # not silently start another attempt after a poll, model change or restart.
+        if not self._claim_generation_attempt(date_key, force=force):
+            return {'status': 'skipped', 'reason': 'daily_attempt_already_started', 'date': date_key}
         payload = self._payload_for(materials)
         dream_text = await self._call_dream_model(payload)
         core_affect = self._core_affect_from_materials(materials)
