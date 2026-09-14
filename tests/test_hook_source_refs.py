@@ -47,7 +47,10 @@ def test_hook_memory_id_reads_all_bound_originals_without_exposing_source_ids(tm
     for context in (result['context'], result['additional_context'], data['additional_context']):
         assert card['id'] in context
         assert 'source_refs' not in context and 'message_ids' not in context
-        assert '绑定原文' not in context and '999' not in context and 'legacy-opaque-key' not in context
+        # The read-on-demand instruction may say "绑定原文"; it is not evidence.
+        for original in ('不应注入的绑定原文', '也不应注入的匿名原文', '已经解绑的原文'):
+            assert original not in context
+        assert '999' not in context and 'legacy-opaque-key' not in context
 
 
 def test_missing_original_id_is_omitted_and_duplicates_do_not_expand_context():

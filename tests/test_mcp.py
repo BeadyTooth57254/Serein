@@ -115,7 +115,7 @@ def test_stdio_mcp_write_read_recall_and_retry(tmp_path):
 def test_read_only_mcp_has_no_writing_tools(tmp_path):
     server = create_server(Application(Settings(tmp_path / "not-opened.db")))
     names = {tool.name for tool in asyncio.run(server.list_tools())}
-    assert names == {"read_memory", "recall_memory", "find_arc", "read_arc_materials"}
+    assert names == {"read_memory", "recall_memory", "find_arc", "read_arc_materials", "read_diary"}
 
 
 @pytest.mark.parametrize('selected', [['save_memory'], ['write_scene'], ['edit_scene']])
@@ -171,12 +171,12 @@ def test_scene_only_schema_edit_preservation_and_proposal_boundary(tmp_path):
                 assert set(schema['properties']) == {'title','body_md','cues','date','document_id','expected_revision','favorite'}
                 assert schema['additionalProperties'] is False
             if tool.name == 'write_scene':
-                assert set(tool.inputSchema['required']) == {'operation_id','title','content','cues','date'}
-                assert set(tool.inputSchema['properties']) == {'operation_id','title','content','cues','date','favorite'}
+                assert set(tool.inputSchema['required']) == {'content','cues'}
+                assert set(tool.inputSchema['properties']) == {'title','content','cues','date','domain','evidence_refs','favorite'}
                 assert tool.inputSchema['additionalProperties'] is False
             if tool.name == 'edit_scene':
-                assert set(tool.inputSchema['required']) == {'operation_id','scene_id','expected_revision'}
-                assert set(tool.inputSchema['properties']) == {'operation_id','scene_id','expected_revision','title','content','cues','date'}
+                assert set(tool.inputSchema['required']) == {'scene_id','expected_updated_at'}
+                assert set(tool.inputSchema['properties']) == {'scene_id','expected_updated_at','title','content','cues'}
                 assert tool.inputSchema['additionalProperties'] is False
         edit = {'scene_id':'scene_bound', 'expected_revision':1, 'content':draft['body_md']}
         saved = await call('edit_scene', {'operation_id':'edit', **edit})

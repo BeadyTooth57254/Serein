@@ -80,7 +80,7 @@ class Services:
                 if target and (target['kind'] != 'scene' or target['metadata'].get('source_record_immutable')):
                     raise ValueError('Only editable Scenes can be changed here')
                 if action in {'save', 'propose'}:
-                    metadata = dict(target['metadata']) if target else {'object_kind':'scene', 'memory_value_source':'authored_scene'}
+                    metadata = dict(target['metadata']) if target else {**value.get('metadata', {}), 'object_kind':'scene', 'memory_value_source':'authored_scene'}
                     if 'cues' in value:
                         metadata['scene_cues'] = value['cues']
                     if 'date' in value:
@@ -96,8 +96,12 @@ class Services:
         from .compat.diaries import write_in_store as write_diary
         with Writer(self._settings.database, favorite_policy=lambda store: read_from_store(store)['features']['favorites'],
                     promotion_policy=lambda store: read_from_store(store)['features']['event_to_scene'],
-                    diary_writer=write_diary) as writer:
+                    diary_writer=write_diary) as writer, writer.store.transaction(immediate=True):
             result = writer.execute(operation_id, action, request, prepare=prepare)
+            if scene_only and request.get('sources') and writer.store.conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='scene_evidence_ids'").fetchone():
+                from .compat.scenes import map_evidence_ids
+                map_evidence_ids(writer.store)
         # A failed cache update must not hide a successful canonical commit.
         try:
             published = result.get('document') or result

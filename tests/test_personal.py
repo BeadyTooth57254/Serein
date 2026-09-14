@@ -93,18 +93,21 @@ def test_optional_favorite_tool_filters_paginates_and_never_records_recall(live)
         store.set_lifecycle('event_11','superseded')
     client.patch('/v1/settings',json={'features':{'favorites':True}}).raise_for_status()
     tools=asyncio.run(server.list_tools());tool=next(t for t in tools if t.name=='read_favorites')
-    assert tool.annotations.readOnlyHint and tool.inputSchema['properties']['limit']['default']==10
+    assert tool.annotations.readOnlyHint and tool.inputSchema['properties']['limit']['default']==5
+    assert tool.inputSchema['properties']['include_archived']['default'] is False
     assert [t.name for t in asyncio.run(restricted.list_tools())]==['read_favorites']
     with Store(settings.database,read_only=True) as store:before='\n'.join(store.conn.iterdump())
     first=client.post('/v1/extensions/read_favorites',json={}).json()
-    assert len(first['items'])==10 and first['has_more'] and first['injected'] is False
+    assert len(first['items'])==5 and first['has_more'] and first['injected'] is False
     second=client.post('/v1/extensions/read_favorites',json={'offset':first['next_offset']}).json()
     ids=[item['id'] for item in first['items']+second['items']]
-    assert len(set(ids))==11 and 'scene_saved' in ids and 'event_00' in ids
+    assert len(set(ids))==10 and 'scene_saved' in ids and 'event_00' not in ids
+    archived=client.post('/v1/extensions/read_favorites',json={'include_archived':True,'limit':100}).json()
+    assert len(archived['items'])==11 and any(item['id']=='event_00' for item in archived['items'])
     assert not {'event_10','event_11','narrative_saved'} & set(ids)
     result=json.loads(asyncio.run(server.call_tool('read_favorites',{'kind':'scene'}))[0].text)
     assert result['items'][0]['document']['body_md']=='Scene body'
-    events=client.post('/v1/extensions/read_favorites',json={'kind':'event','include_archived':False,'with_evidence':True}).json()
+    events=client.post('/v1/extensions/read_favorites',json={'kind':'event','include_archived':False,'with_evidence':True,'limit':100}).json()
     assert len(events['items'])==9 and all(item['kind']=='event' for item in events['items'])
     assert next(item for item in events['items'] if item['id']=='event_01')['evidence']
     for args in [{'kind':'narrative'},{'limit':0},{'limit':True},{'offset':-1},{'with_evidence':'yes'}]:

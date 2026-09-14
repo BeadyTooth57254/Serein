@@ -13,9 +13,9 @@ def tools_for(settings):
     tools = {}
     if enabled['favorites']:
         from ..core.personal import Personal
-        def read_favorites(kind: Literal['all','event','scene'] = 'all', limit: int = 10, offset: int = 0,
-                           include_archived: bool = True, with_evidence: bool = False) -> dict:
-            """Read full favorited Event/Scene bodies, newest favorite first. kind defaults to both; limit=1..100 (default 10), offset paginates. Archived favorites are included by default; deleted/superseded memories are hidden. with_evidence adds original evidence. Explicit reading never records injection, changes favorites, or consumes recall cooldown."""
+        def read_favorites(limit: int = 5, offset: int = 0, include_archived: bool = False,
+                           with_evidence: bool = False, kind: Literal['all','event','scene'] = 'all') -> dict:
+            """Read full favorited Event/Scene bodies, newest favorite first. Defaults match the self-use tools: limit=5, include_archived=False, with_evidence=False. kind optionally filters Event or Scene. limit=1..100; offset paginates. Deleted/superseded memories are hidden. Explicit reading never records injection, changes favorites, or consumes recall cooldown."""
             if not read_settings(settings.database)['features']['favorites']:raise ValueError('Favorite reading is disabled')
             if kind not in ('all','event','scene'):raise ValueError('kind must be all, event or scene')
             if type(limit) is not int or not 1<=limit<=100 or type(offset) is not int or offset<0:

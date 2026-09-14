@@ -110,8 +110,8 @@ export function UsageGuide({ onOpenSettingsTab }) {
         <li>在<SettingsLink tab="features" onOpen={onOpenSettingsTab}>功能</SettingsLink>按需开启心绪、备忘、窗影、原话查阅、收藏工具和开窗续接。聊天记录与 Operit 备份在<SettingsLink tab="imports" onOpen={onOpenSettingsTab}>对话导入</SettingsLink>处理；Ombre 旧库到<SettingsLink tab="migration" onOpen={onOpenSettingsTab}>旧库迁移</SettingsLink>。</li>
       </ol>
       <h4>主窗口保存 Scene</h4>
-      <p><code>write_scene</code> 只管新建，直接填标题 <code>title</code>、正文 <code>content</code>、检索线索 <code>cues</code> 和日期 <code>date</code>，不用套 draft。cues 为 1–8 条短线索，每条最多 80 字符；日期用 <code>YYYY-MM-DD</code>。新建 ID 由服务端生成，不用传原文证据、原话 ID 或 kind；同一次保存重试时沿用 <code>operation_id</code>，避免重复保存。</p>
-      <p><code>edit_scene</code> 只管修改已有 Scene：先用 <code>read_memory</code> 读回内容，传 <code>scene_id</code>、当前 <code>expected_revision</code> 和 <code>operation_id</code>，再填写要改的 title、content、cues 或 date。不传的字段保持原样，已有证据和其他信息保留；版本过期时重新读取后再改。升级后请刷新工具列表，旧 <code>save_memory</code> 不再提供。</p>
+      <p><code>write_scene</code> 只必填正文 <code>content</code> 和检索线索 <code>cues</code>（1–8 条，每条最多 80 字符）。标题、日期和主域可选；编号由程序生成，无须填写 operation_id。默认不绑原话，明确要求引用时才传 evidence_refs。响应丢失时先读回确认，避免重复新建。</p>
+      <p><code>edit_scene</code> 修改已有 Scene：先用 <code>read_memory</code> 读取，传 <code>scene_id</code>、读回的 <code>expected_updated_at</code> 和要改的 title、content 或 cues。未传字段和已有证据保留。状态使用 <code>set_scene_status</code>，批注使用 <code>annotate</code>。日记用独立的 read_diary、write_diary、revise_diary、comment_diary、delete_diary；升级后刷新工具列表。</p>
       <p>需要审核时仍可用 <code>propose_memory</code>，在 draft 中填写 title、body_md、cues、date，接受候选后才正式保存。Event 由原话整理流程生成；叙事卷正文走 <code>narrative_volume</code>，开启“主模型读写叙事卷”后，由主模型读取材料、自己写正文、预览并保存，不额外调用 Writer 模型。</p>
       <h4>把 Event 写成自己的 Scene</h4>
       <p>在功能页开启“Event 升为 Scene”并保存后，主窗口可以用 <code>read_memory</code> 读取摘要和绑定原话，自己改好标题、正文，再调用 <code>promote_event_to_scene</code>，传 Event ID、当前版本和改好的文字。工具保留 Event 原件及原话绑定，生成关联 Scene；原 Event 不再自动浮现，也不进入叙事卷修订箱。这一步不会自动执行。关闭开关会停用工具，已有内容保留。</p>
@@ -121,7 +121,7 @@ export function UsageGuide({ onOpenSettingsTab }) {
     <section className="settings-group usage-guide__page" {...page(1)}>
       <div className="settings-group__heading"><h3>收藏的记忆</h3></div>
       <p>Event 和 Scene 详情都可点击“收藏”，在各自的“舍不得丢的”视图查看，归档的收藏也会保留。取消收藏不删除记忆。</p>
-      <p>开启“收藏工具”后，客户端刷新工具列表即可使用 <code>read_favorites</code>。默认读取两类收藏的全文，每页 10 条；<code>kind</code> 可填 <code>event</code> 或 <code>scene</code>，用 <code>limit</code> 和 <code>offset</code> 分页。默认包含归档收藏，<code>with_evidence</code> 可附原文证据。读取不影响自动召回和冷却。</p>
+      <p>开启“收藏工具”后，客户端刷新工具列表即可使用 <code>read_favorites</code>。默认读取两类收藏的全文，每页 5 条；<code>kind</code> 可填 <code>event</code> 或 <code>scene</code>，用 <code>limit</code> 和 <code>offset</code> 分页。默认不包含归档收藏，传 include_archived 可读取，<code>with_evidence</code> 可附原文证据。读取不影响自动召回和冷却。</p>
       <p>AI 可在 <code>write_scene</code> 中传 <code>favorite: true</code> 随正文一起收藏；旧记忆用 <code>set_memory_state</code>，传记忆 ID、当前版本和 <code>favorite</code>，无需重写正文。<code>true</code> 收藏、<code>false</code> 取消，不传保持原样。需要实例允许写入；关闭“收藏工具”会禁止 AI 修改收藏，但页面仍可使用。</p>
     </section>
     <section className="settings-group usage-guide__page" {...page(2)}>

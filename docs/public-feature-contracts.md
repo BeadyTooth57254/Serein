@@ -6,31 +6,29 @@
 
 本次路由资源代号为 `public-synthetic-v2`。旧路由向量不能冒充新例句的向量，升级后需要重新准备；新的例句保留路由类型、启停和阈值，不代表分类准确率与旧版完全相同。发行脚本同时检查样例中的已知私人身份、原样私人示例、私人路径／记录标识，以及文本文件中的密钥格式；检查失败不产出发行包。自动规则不能替代人工审阅，也不能清除已下载的历史副本。
 
-## 基础 MCP 工具与自用版的区别
+## 基础 MCP 工具
 
-公开版以当前 `tools/list` 为准；更新后客户端需要刷新工具列表，不能直接照搬自用版的参数。
+Scene、日记和批注工具按自用版的名称、参数和默认值提供。升级后刷新客户端工具列表。
 
-| 用途 | 公开版 | 自用版接口差异 |
-| --- | --- | --- |
-| 新建 / 修改 Scene | `write_scene` / `edit_scene`；新建必填标题、正文、cues、日期，ID 自动生成，默认不绑定原话 | 同名工具；编辑使用 `expected_updated_at`，公开版使用当前数字 `expected_revision` |
-| 状态与收藏 | `set_memory_state` 修改 Scene 状态；Event 只用它改收藏 | 自用版用 `set_scene_status` 修改 Scene 状态；不能将公开版通用名字理解为允许编辑所有类型 |
-| 读取 / 新建 / 修改日记 | `read_memory("diary:ID")`；`write_diary` 根据是否传 `entry_id` 区分新建与修改 | 自用版另有 `read_diary`、`revise_diary`；自用版修改不要求调用方提供版本号，公开版修改需当前版本防止覆盖 |
-| 叙事卷正文 | 开启叙事卷工具后，通过 `narrative_volume` 的 read → preview → save 写入 | 使用专门的叙事卷流程，不通过 Scene 工具；预览不落库，保存校验版本 |
-| 批注 | 公开 MCP 没有独立的 `annotate` 工具 | 自用版提供该工具；`comment_diary` 只用于日记评论，不能替代一般记忆批注 |
+| 用途 | 工具及参数 |
+| --- | --- |
+| 新建 Scene | `write_scene(content, cues, title='', date='', domain='', evidence_refs=None)`；只必填正文和 cues；可额外传 `favorite` |
+| 修改 Scene | `edit_scene(scene_id, expected_updated_at, title=None, content=None, cues=None)`；先读当前更新时间 |
+| Scene 状态 | `set_scene_status(scene_id, expected_updated_at, status)`；active / archived / deleted，删除为软删除 |
+| 读取日记 | `read_diary(diary_id=None, date='', limit=20)`；按编号、日期读取或列出最近日记 |
+| 新建日记 | `write_diary(content, date='', title='', author='ai', unlock_at='')`；日期默认当天，未来解锁时间表示暗房日记 |
+| 修订日记 | `revise_diary(diary_id, content, title=None, date=None)`；保留作者及历史 |
+| 日记评论 | `comment_diary(diary_id, content, author='ai')` |
+| 删除日记 | `delete_diary(diary_id)`；软删除，保留历史 |
+| 批注 | `annotate(memory_id, content, author='', role='assistant', annotation_id='')`；作者省略时使用实例 AI 名称，不改原文或证据 |
 
-`save_memory` 已从公开 MCP 移除。旧工具白名单中的这个名字会映射到 `write_scene` / `edit_scene`，但调用旧工具本身仍会被拒绝。Event 由原话整理流水线产出；`propose_memory` / `review_memory` 只接受 Scene 写入，不能借提案绕过类型限制。Event 升 Scene 使用独立可选工具 `promote_event_to_scene`。
+以上工具不要求模型填写 `operation_id` 或数字版本号。Scene 编辑使用 `read_memory` 返回的 `document.updated_at`，在事务内检查冲突。日记修改在事务内读取和更新当前版本，保持自用版调用方式；不提供调用方跨请求的旧版本校验，写前应先读。锁定日记不可读正文、不可修订、评论或删除。日记没有收藏。
 
-公开版写入的 `operation_id` 是防重复标识，不是版本号；一次独立操作一个新标识，同内容重试复用。新建 Scene、日记不需要当前版本；修改已有正文先读再传版本。日记没有收藏，`set_memory_state` 也不能当日记或叙事卷编辑器。
+Scene 和日记的新建调用会独立创建内容；内部随机操作编号不等于跨请求自动去重。响应丢失时先读回确认，不要盲目重复保存。完整的 rc65 旧参数（包含 `operation_id`）仍通过内部兼容入口处理，保留旧重试回执和数字版本校验；新旧参数不能混用，兼容入口同样受工具白名单与只读权限约束。
 
-`index_sync` 用于重试已提交写入的索引同步，分段向量仍由后台队列处理。它不等同于配置页的“建立 / 补齐检索索引”，也不会凭空补齐所有未入队的历史向量缺口；按钮的使用时机与重复运行开销见 [模型配置](model-settings.md)。
+公开版附加的 `set_memory_state` 保留状态、浮现资格和收藏管理；Event 仅允许修改收藏。Scene 提案的 `propose_memory` / `review_memory` 与 Event 升 Scene 的独立可选工具仍保留自身的版本和回执契约。`save_memory` 已移除，旧白名单中的该名称映射到 `write_scene` / `edit_scene`。叙事卷仍由 `narrative_volume` 的 read → preview → save 流程书写，Event 正文由原话整理流水线维护。
 
-## 日记工具
-
-`write_diary` 新建日记时提供 `operation_id`、`kind="diary"`、`author`、`day`、`body_md`，标题可选；不传 `entry_id` 和 `expected_revision`。暗房日记使用 `kind="darkroom"`，并提供带时区的未来 `unlock_at`。
-
-`operation_id` 是调用方生成的防重复标识，不是版本号。同一次写入失败重试时复用它和完全相同的参数；下一次独立操作使用新标识。修改已有日记时先通过 `read_memory("diary:ID")` 读取，再向 `write_diary` 传入当前 `entry_id` 和 `expected_revision`；冲突时重新读取，不覆盖别人的新修改。`comment_diary` 不需要版本号，`delete_diary` 需要当前版本号并保留软删除记录。
-
-带有旧日记表的迁移实例使用与网页、自用版相同的日记写入器；正文、评论、历史、读取投影和防重复回执一起提交，任何一步失败全部回滚。锁定日记不能借工具提前读取或修改。日记没有收藏功能，日记工具不提供 `favorite` 参数；功能设置中的收藏只针对 Event / Scene。
+`index_sync` 重试已提交写入的索引同步；它不等同于配置页的“建立 / 补齐检索索引”。
 
 ## 聊天指令接续
 
@@ -148,36 +146,28 @@ Writer 沿用 320 字上限，不设最低字数；保留自检与至多两轮�
 
 ## 主模型新建与编辑 Scene
 
-公开 MCP 使用独立的 `write_scene` / `edit_scene`。它们只写 Scene，分别负责新建与局部编辑，正文参数统一为 `content`；继续使用 `operation_id` 重试去重和数字 `expected_revision` 版本校验。旧 `save_memory` 不再注册；配置白名单中已有的 `save_memory` 自动对应这两个工具，单独指定新工具名时仍只开放指定能力。升级后客户端需要刷新工具列表。
-
-`write_scene` 新建参数直接填写，不再嵌套 draft：
+公开 MCP 的 Scene 工具保持自用调用方式。新建示例：
 
 ```json
 {
-  "operation_id": "scene-create-unique-request",
-  "title": "一起等雨停",
-  "content": "这是主窗口自己写下的 Scene 正文。",
-  "cues": ["等雨停", "窗边的谈话"],
-  "date": "2026-09-14"
+  "content": "下午去了图书馆，读完了上次没读完的章节。",
+  "cues": ["图书馆", "读完章节"]
 }
 ```
 
-`cues` 为 1–8 个非空短线索，每条最多 80 字符，日期必须是真实的 YYYY-MM-DD 日期；二者分别落入 Scene 的 `scene_cues` 和 `date` 元数据。新 ID 由服务端生成，不要求原文证据。可选 `favorite` 保留收藏开关与事务语义。
+标题、日期和主域可选；省略标题使用正文开头，日期省略保持空值。默认不绑定原话；只有明确要求引用时才提供 `evidence_refs`，程序验证来源标识和原文哈希。Scene ID 与内部操作编号均由服务端生成。
 
-`edit_scene` 先用 `read_memory` 读取已有 Scene 的 ID 与 revision，再传要改的字段。例如只改正文：
+修改示例（更新时间取自本次 `read_memory` 结果）：
 
 ```json
 {
-  "operation_id": "scene-edit-unique-request",
-  "scene_id": "scene_读取到的ID",
-  "expected_revision": 1,
-  "content": "修改后的正文。"
+  "scene_id": "scene_example",
+  "expected_updated_at": "2026-09-14T08:00:00+00:00",
+  "content": "修改后的原样正文"
 }
 ```
 
-标题、正文、cues、日期都可以单独修改，至少填写一项；省略或 null 保留旧值，不表示清空。合并与版本检查在同一事务内完成，保留既有证据、主域、来源与其他元数据。缺失、已删除、不可变或版本过期的目标不能通过编辑工具覆盖或变成新建。收藏和生命周期继续使用 `set_memory_state`，只改收藏不会重写正文。
-
-两个工具均保留 `operation_id` 回执。同一次操作重试使用相同 ID 和参数；成功后即使又有其他修改，重试也只返回原回执，不恢复旧内容。新建与编辑的参数严格分开，额外传入 kind、draft、原话 ID 等未声明字段会报错。
+省略的标题、cues、已有证据和其他元数据保留。过期更新时间返回 conflict；缺失、已删除、不可变或非 Scene 目标不能被覆盖或变成新建。新 schema 不接收 kind、draft、operation_id 或 expected_revision。完整 rc65 旧参数仍可由内部兼容入口验证执行。收藏使用可选 favorite 或 set_memory_state；Scene 状态也可使用 set_scene_status。
 
 `propose_memory` 保留 Scene 候选审核入口，draft 仍用 `title`、`body_md`、`cues`、`date`，可选收藏意图；修改提案仍带 `document_id` 和 `expected_revision`。接受候选在事务内检查类型，历史 Event / Narrative 候选只能在此忽略，不能借接受操作绕过写入边界。
 
@@ -187,7 +177,7 @@ Event 正文交给原话整理流程。主模型自行写叙事卷仍使用 `nar
 
 Event 和 Scene 详情均使用“收藏／已收藏”按钮，各自的“舍不得丢的”视图包含活动及归档收藏，支持标题／正文搜索；取消收藏后视图和计数同步更新，刷新后从服务端恢复。收藏状态仍保存在 personal_records，不改正文，不改变自动召回资格。
 
-功能设置中的“收藏工具”（features.favorites）默认关闭，只控制模型工具，不影响页面收藏。开启后注册 `read_favorites(kind='all', limit=10, offset=0, include_archived=true, with_evidence=false)`：默认按最近收藏顺序读取 Event/Scene 全文，kind 可选 all/event/scene，limit 为 1–100，使用 has_more/next_offset 分页；可附原文证据。归档默认可显式阅读，已删除、被替代的记忆和叙事卷不返回。读取不改收藏、不写注入记录、不消耗冷却。HTTP 与 MCP 共用同一开关，只读实例也可提供该工具。
+功能设置中的“收藏工具”（features.favorites）默认关闭，只控制模型工具，不影响页面收藏。开启后注册 `read_favorites(limit=5, offset=0, include_archived=false, with_evidence=false, kind='all')`：默认按最近收藏顺序读取 Event/Scene 全文，kind 可选 all/event/scene，limit 为 1–100，使用 has_more/next_offset 分页；可附原文证据。归档需显式传 include_archived=true 才返回，已删除、被替代的记忆和叙事卷不返回。读取不改收藏、不写注入记录、不消耗冷却。HTTP 与 MCP 共用同一开关，只读实例也可提供该工具。
 
 此工具独立于 resume；原有 favorite_scenes 续接选项仍只取 Scene，不因新增工具而扩大自动续接范围。
 

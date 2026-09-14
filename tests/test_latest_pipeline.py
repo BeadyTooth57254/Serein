@@ -28,11 +28,11 @@ def test_parked_correction_is_readable_but_not_owned(settings):
     batch=p.new_batch(settings.database,False,datetime.fromisoformat('2025-02-02T04:00:00+08:00'))
     task=curator_task(settings);component=task['request']['component']
     rendered=latest.event_curator_model_input(component)
-    assert [u['scope'] for u in rendered['units']]==['stable','parked']
+    assert [u['scope'] for u in rendered['units']]==['stable','stable','parked']
     assert 'cannot make' in rendered['units'][-1]['messages'][0]['text']
     output=output_for('event_curator',task['request']);output['events'][0]['owned_unit_roots'].append(component['parked_context_source_ids'][0])
     with pytest.raises(ValueError):p.validate(task['request'],output)
-    deferred={'events':[],'skip_unit_roots':[],'defer_unit_roots':[component['messages'][0]['id']]}
+    deferred={'events':[],'skip_unit_roots':[],'defer_unit_roots':[m['id'] for m in component['messages']]}
     assert len(latest.normalize_event_curator_output(deferred,component)['defer_source_message_ids'])==2
 
 

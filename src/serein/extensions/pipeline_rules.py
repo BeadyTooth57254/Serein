@@ -2,9 +2,35 @@
 See docs/public-feature-contracts.md for provenance and host differences.
 """
 import re
+from datetime import datetime, timedelta
 from typing import Any
 TRACK_ROUTING_ROLES = {"origin", "primary_activity", "landing", "bridge", "routine"}
 TRACK_EVENT_POLICIES = {"default", "rolling_engineering"}
+
+
+def flushable_dialogue_units(messages, *, now):
+    """Completed exchanges up to a real silence boundary, separately per session."""
+    sessions = {}
+    for item in sorted(messages, key=lambda item: item['id']):
+        sessions.setdefault(item['session_id'], []).append(item)
+    ready = []
+    silence = timedelta(minutes=20)
+    for rows in sessions.values():
+        units = dialogue_units(rows)
+        last = -1
+        for index, unit in enumerate(units):
+            times = [datetime.fromisoformat(m['created_at'].replace('Z', '+00:00')) for m in unit]
+            end = max(times)
+            if index + 1 < len(units):
+                following = min(datetime.fromisoformat(m['created_at'].replace('Z', '+00:00'))
+                                for m in units[index + 1])
+                paused = following - end >= silence
+            else:
+                paused = end <= now - silence
+            if paused:
+                last = index
+        ready.extend(unit for unit in units[:last + 1] if dialogue_unit_is_complete(unit))
+    return sorted(ready, key=lambda unit: unit[0]['id'])
 def dialogue_units(messages: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
     units: list[list[dict[str, Any]]] = []
     current: list[dict[str, Any]] = []

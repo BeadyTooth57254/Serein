@@ -7,15 +7,16 @@ from ..core.store import Store, Conflict, encode, digest, now
 from ..deployment import identity, task_model, read_settings
 from .pipeline_limits import blocks, allowed_ids
 from ..compat.events import Events, reference_blockers
-from .pipeline_rules import dialogue_units, dialogue_unit_is_complete, normalize_event_track_message_output
+from .pipeline_rules import dialogue_units, dialogue_unit_is_complete, normalize_event_track_message_output, flushable_dialogue_units
 from . import pipeline_latest as latest
 from .pipeline_config import snapshot, execution
 from .pipeline_scenes import freeze_scene_context, verify_scene_context, SceneContextChanged
 from .pipeline_images import freeze_images, verify_images, bind_transcriptions, decision, expire_completed_media
+from . import pipeline_tracks as track_state
 
 ROLES=('track_router','event_curator','event_writer')
 TZ=timezone(timedelta(hours=8))
-CONTRACT='public-event-scene-context-v1'
+CONTRACT='public-event-message-tracks-v2'
 
 
 def initialize(database):
@@ -71,7 +72,7 @@ def new_batch(database,include_recent,clock=None):
             for row in store.conn.execute("SELECT request_json,output_json FROM pipeline_jobs WHERE batch_id=? AND role LIKE 'track_router%' AND output_json IS NOT NULL ORDER BY rowid",(old['id'],)):
                 request=json.loads(row['request_json'])
                 assignments,cards,_=normalize_event_track_message_output(json.loads(row['output_json']),request['messages'],request['active_tracks'],
-                    session_id=old_data['scope'],next_track_ordinal=1+len(request['active_tracks']))
+                    session_id=old_data['scope'],next_track_ordinal=request.get('next_track_ordinal',track_state.next_ordinal(old_data['scope'],request['active_tracks'])))
                 for card in cards:store.conn.execute('INSERT OR IGNORE INTO pipeline_tracks VALUES (?,?,?)',(card['track_id'],old_data['scope'],encode(card)))
                 for a in assignments:store.conn.execute('INSERT OR IGNORE INTO pipeline_routes VALUES (?,?)',(a['source_message_id'],encode(a)))
             store.conn.execute("UPDATE pipeline_batches SET status='superseded_input_budget' WHERE id=?",(old['id'],))
@@ -96,11 +97,10 @@ def new_batch(database,include_recent,clock=None):
                     (stable if ready else parked).extend(unit)
                 if not stable:continue
                 scope=digest(encode([source,session]))[:20]
-                previous=store.conn.execute('SELECT session_id FROM raw_events WHERE source=? AND session_id<>? AND id<? ORDER BY id DESC LIMIT 1',(source,session,eligible[0]['id'])).fetchone()
-                previous_scope=digest(encode([source,previous[0]]))[:20] if previous else scope
-                tracks=[json.loads(row[0]) for row in store.conn.execute('SELECT card_json FROM pipeline_tracks WHERE scope IN (?,?)',(scope,previous_scope))]
+                with latest.identity_scope(identity(database)):
+                    tracks,ordinal=track_state.load_tracks(store,source,session,eligible[0]['id'],message)
                 recent=[message(row) for row in store.conn.execute('SELECT * FROM raw_events WHERE source=? AND session_id=? AND id<? ORDER BY id DESC LIMIT 6',(source,session,eligible[0]['id']))][::-1]
-                data={'contract':CONTRACT,'input_policy':policy,'messages':stable,'parked':parked,'routing_messages':eligible,'tracks':tracks,'scope':scope,'source':source,'recent':recent,'day':watermark.date().isoformat()}
+                data={'contract':CONTRACT,'input_policy':policy,'messages':stable,'parked':parked,'routing_messages':eligible,'tracks':tracks,'next_track_ordinal':ordinal,'scope':scope,'source':source,'recent':recent,'day':watermark.date().isoformat()}
                 key='pipeline:'+digest(encode(data))
                 while True:
                     existing=store.conn.execute('SELECT status FROM pipeline_batches WHERE id=?',(key,)).fetchone()
@@ -114,21 +114,24 @@ def new_batch(database,include_recent,clock=None):
 
 def route_result(data,output):
     if output.get('_public_normalized'):
-        return output['assignments'],output['tracks'],1+len(output['tracks'])
-    return normalize_event_track_message_output(output,data['routing_messages'],data['tracks'],session_id=data['scope'],next_track_ordinal=1+len(data['tracks']))
+        return output['assignments'],output['tracks'],output.get('next_track_ordinal',track_state.next_ordinal(data['scope'],output['tracks']))
+    return normalize_event_track_message_output(output,data['routing_messages'],data['tracks'],session_id=data['scope'],next_track_ordinal=data.get('next_track_ordinal',track_state.next_ordinal(data['scope'],data['tracks'])))
 
 
 async def route_batch(database,batch,data,runner):
     chunks=blocks(data['routing_messages'],read_settings(database)['pipeline']['max_input_chars'])
-    cards={t['track_id']:t for t in data['tracks']};assignments=[];ordinal=1+len(cards);prior=list(data['recent'])
+    cards=list(data['tracks']);assignments=[];ordinal=data.get('next_track_ordinal',track_state.next_ordinal(data['scope'],cards));prior=list(data['recent'])
     for index,block in enumerate(chunks):
-        bounded={**data,'routing_messages':block,'tracks':list(cards.values()),'recent':prior[-6:]}
+        bounded={**data,'routing_messages':block,'tracks':track_state.parked(cards),'next_track_ordinal':ordinal,'recent':prior[-6:]}
         prompt_batch={**batch,'input_json':encode(bounded)}
         output=await job(database,batch,request_for(database,prompt_batch,'track_router'),f'track_router:{index}',runner)
-        routed,updates,ordinal=normalize_event_track_message_output(output,block,list(cards.values()),session_id=data['scope'],next_track_ordinal=ordinal)
-        assignments.extend(routed);cards.update({t['track_id']:t for t in updates});prior.extend(block)
+        routed,updates,ordinal=normalize_event_track_message_output(output,block,cards,session_id=data['scope'],next_track_ordinal=ordinal)
+        with latest.identity_scope(identity(database)):
+            cards=track_state.update_cards(cards,routed,updates,block,data['scope'])
+        assignments.extend(routed);prior.extend(block)
     used={t for a in assignments for t in [a['primary_track_id'],*a['context_track_ids']]}
-    return {'assignments':assignments,'tracks':[t for t in cards.values() if t['track_id'] in used],'_public_normalized':True}
+    return {'assignments':assignments,'tracks':[t for t in cards if t['track_id'] in used],
+            'track_state_updates':cards,'next_track_ordinal':ordinal,'_public_normalized':True}
 
 
 def source_key(ref):return (ref['source_system'],ref['session_id'],ref['message_id'])
@@ -186,15 +189,12 @@ def components(database,data,routed):
 
 def routing_units(messages,assignments):
     by_id={item['source_message_id']:item for item in assignments};units=[];edges=[]
-    for group in dialogue_units(messages):
-        routes=[by_id[m['id']] for m in group]
-        tracks={row['primary_track_id'] for row in routes}
-        if len(tracks)!=1:raise ValueError('Track Router split an atomic dialogue unit across primary Tracks')
-        root=group[0]['id'];contexts={t for row in routes for t in row['context_track_ids']}
-        units.append({'unit_root_message_id':root,'source_message_ids':[m['id'] for m in group],
-                      'track_id':routes[0]['primary_track_id'],'session_id':group[0]['session_id'],
-                      'routing_role':'bridge' if contexts else 'primary_activity'})
-        edges.extend({'unit_root_message_id':root,'track_id':track,'relation':'bridge'} for track in sorted(contexts))
+    for item in messages:
+        route=by_id[item['id']]
+        units.append({'unit_root_message_id':item['id'],'source_message_ids':[item['id']],
+                      'track_id':route['primary_track_id'],'session_id':item['session_id'],
+                      'routing_role':route['routing_role']})
+        edges.extend({'unit_root_message_id':item['id'],'track_id':track,'relation':'bridge'} for track in route['context_track_ids'])
     return units,edges
 
 
@@ -230,9 +230,9 @@ def request_for(database,batch,role,**fields):
     with latest.identity_scope(names):
         request['rules']=latest.materialize_agent_rules(role)
         if role=='track_router':
-            request.update(messages=data['routing_messages'],active_tracks=data['tracks'])
-            prompt=latest.build_event_track_message_prompt(data['day'],request['messages'],data['tracks'],recent_context_messages=data['recent'])
-            prompt+='\n以下每组是不可拆的完整对话单元，组内所有消息必须选择同一个 primary_track_ref；仍逐消息返回 assignment：'+encode([[m['id'] for m in unit] for unit in dialogue_units(request['messages'])])
+            request.update(messages=data['routing_messages'],active_tracks=track_state.parked(data['tracks']),
+                           next_track_ordinal=data.get('next_track_ordinal',track_state.next_ordinal(data['scope'],data['tracks'])))
+            prompt=latest.build_event_track_message_prompt(data['day'],request['messages'],request['active_tracks'],recent_context_messages=data['recent'])
         elif role=='event_curator':
             component=fields['component']
             images,missing=writer_images(component['context_messages'],{m['id'] for m in component['messages']})
@@ -397,10 +397,7 @@ def extend_context(database,component,context_request):
             (context_request['before_message_id'],context_request['track_id'],context_request['track_id'])).fetchall()
     existing={m['id']:m for m in component['context_messages']}
     prior=[message(r) for r in reversed(rows) if message(r)['session_id'] in component['context_session_ids']]
-    units=[]
-    for session in dict.fromkeys(m['session_id'] for m in prior):
-        units.extend(dialogue_units([m for m in prior if m['session_id']==session]))
-    units=sorted(units,key=lambda unit:unit[-1]['id'])[-6:]
+    units=[[item] for item in sorted(prior,key=lambda item:item['id'])[-6:]]
     selected=[m for unit in units for m in unit]
     existing.update({m['id']:m for m in selected})
     covered={source for unit in component['memberships'] for source in unit['source_message_ids']}
@@ -436,8 +433,9 @@ def settle(database,batch,data,routed,plans):
             'protected_deferrals':[entry for _,plan,_ in plans for entry in plan['hard_skips']]}
     def finish(conn):
         for component,_,_ in plans:verify_scene_context(database,component,conn=conn)
-        for card in tracks:
-            conn.execute('INSERT INTO pipeline_tracks VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET scope=excluded.scope,card_json=excluded.card_json',(card['track_id'],data['scope'],encode(card)))
+        with latest.identity_scope(identity(database)):
+            cards=routed.get('track_state_updates') or track_state.update_cards(data['tracks'],assignments,tracks,data['routing_messages'],data['scope'])
+        track_state.persist(conn,cards,data['scope'])
         for a in assignments:conn.execute('INSERT OR REPLACE INTO pipeline_routes VALUES (?,?)',(a['source_message_id'],encode(a)))
         for item,detail in zip(items,details):
             key=conn.execute('SELECT item_id FROM fact_events WHERE origin_id=?',(item['origin_id'],)).fetchone()[0]
@@ -544,23 +542,22 @@ async def _flush_routes_frozen(database):
         rows=[message(r) for r in store.conn.execute('SELECT r.* FROM raw_events r WHERE NOT EXISTS (SELECT 1 FROM pipeline_routes p WHERE p.raw_id=r.id)'+upload+' ORDER BY r.id')]
     sessions={}
     for row in rows:sessions.setdefault((row['source'],row['original_session_id']),[]).append(row)
-    cutoff=datetime.now(timezone.utc)-timedelta(minutes=20)
+    current=datetime.now(timezone.utc)
     for (source,session),messages in sessions.items():
-        units=[unit for unit in dialogue_units(messages) if dialogue_unit_is_complete(unit) and datetime.fromisoformat(unit[-1]['created_at'].replace('Z','+00:00'))<=cutoff]
+        units=flushable_dialogue_units(messages,now=current)
         if len(units)<5:continue
         messages=[row for unit in units for row in unit];scope=digest(encode([source,session]))[:20]
         with Store(database) as store:
-            previous=store.conn.execute('SELECT session_id FROM raw_events WHERE source=? AND session_id<>? AND id<? ORDER BY id DESC LIMIT 1',(source,session,messages[0]['id'])).fetchone()
-            previous_scope=digest(encode([source,previous[0]]))[:20] if previous else scope
-            tracks=[json.loads(r[0]) for r in store.conn.execute('SELECT card_json FROM pipeline_tracks WHERE scope IN (?,?)',(scope,previous_scope))]
+            with latest.identity_scope(identity(database)):
+                tracks,ordinal=track_state.load_tracks(store,source,session,messages[0]['id'],message)
             recent=[message(r) for r in store.conn.execute('SELECT * FROM raw_events WHERE source=? AND session_id=? AND id<? ORDER BY id DESC LIMIT 6',(source,session,messages[0]['id']))][::-1]
-            data={'contract':CONTRACT,'routing_messages':messages,'tracks':tracks,'scope':scope,'recent':recent,'day':datetime.now(TZ).date().isoformat()}
+            data={'contract':CONTRACT,'routing_messages':messages,'tracks':tracks,'next_track_ordinal':ordinal,'scope':scope,'recent':recent,'day':current.astimezone(TZ).date().isoformat()}
             key='route:'+digest(encode(data));batch={'id':key,'input_json':encode(data)}
             store.conn.execute("INSERT OR IGNORE INTO pipeline_batches(id,scope,input_json,status) VALUES (?,?,?,'routing_only')",(key,scope,batch['input_json']))
         output=await route_batch(database,batch,data,None)
         assignments,updates,_=route_result(data,output)
         with Store(database) as store,store.transaction(immediate=True):
-            for card in updates:store.conn.execute('INSERT INTO pipeline_tracks VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET scope=excluded.scope,card_json=excluded.card_json',(card['track_id'],scope,encode(card)))
+            track_state.persist(store.conn,output['track_state_updates'],scope)
             for a in assignments:store.conn.execute('INSERT OR REPLACE INTO pipeline_routes VALUES (?,?)',(a['source_message_id'],encode(a)))
             store.conn.execute("UPDATE pipeline_batches SET status='routed' WHERE id=?",(key,))
 

@@ -65,7 +65,7 @@ def test_pipeline_shared_snapshot_skip_old_keep_new_and_receipts(settings):
             snapshot=request['component']['existing_scenes'];seen.append(snapshot)
             assert len(snapshot)==1 and snapshot[0]['matched_source_message_ids']==[1,2]
             assert p.latest.event_curator_model_input(request['component'])['existing_scenes']==snapshot
-            output['skip_unit_roots']=[1];output['events'][0]['owned_unit_roots']=[3]
+            output['skip_unit_roots']=[1,2];output['events'][0]['owned_unit_roots']=[3,4]
         if role=='event_writer':
             assert request['component']['existing_scenes']==seen[0]
             assert encode(seen[0]) in request['prompt']
@@ -107,7 +107,7 @@ def test_skip_only_still_verifies_scene_before_marking_originals(settings):
     async def runner(role,request):
         if role=='event_curator':
             with Store(settings.database) as store:store.set_lifecycle('scene','deleted')
-            return {'events':[],'skip_unit_roots':[1],'defer_unit_roots':[]}
+            return {'events':[],'skip_unit_roots':[1,2],'defer_unit_roots':[]}
         return output_for(role,request)
     with pytest.raises(scenes.SceneContextChanged):asyncio.run(p.advance(settings.database,include_recent=True,runner=runner))
     with Store(settings.database,read_only=True) as store:
