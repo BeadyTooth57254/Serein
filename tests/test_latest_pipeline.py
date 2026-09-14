@@ -61,20 +61,22 @@ def test_three_stages_and_writer_sees_exact_predecessor_originals(settings):
     task=asyncio.run(p.advance(settings.database,include_recent=True));prompt=task['request']['prompt']
     assert len(task['request']['messages'])==4
     assert task['role']=='event_writer' and 'Book club plan 1' in prompt and 'Book club plan 2' in prompt
-    assert '<previous_events_json>' in prompt and '320' in prompt
+    assert '<previous_events_json>' in prompt and '正文上限' not in prompt
     with Store(settings.database) as store:
         detail=json.loads(store.conn.execute('SELECT details_json FROM pipeline_event_details').fetchone()[0])
         assert 'evidence' not in detail
         assert set(detail['source_activity_roles'])=={'1','2'}
 
 
-def test_native_bridge_writer_contract_short_body_no_new_evidence_gate():
+def test_native_bridge_writer_contract_has_no_fixed_body_limit():
     request={'messages':[{'id':1,'content':'A book was returned'}]}
     output=output_for('event_writer',request)
     output['event_draft']='书还了。'
     assert latest.validate_event_writer_result(output)==[]
-    output['event_draft']='书'*321
-    assert latest.validate_event_writer_result(output)
+    output['event_draft']='书'*1200
+    assert latest.validate_event_writer_result(output)==[]
+    output['title']=''
+    assert '标题为空' in latest.validate_event_writer_result(output)
 
 
 @pytest.mark.parametrize('accepted',[False,True])

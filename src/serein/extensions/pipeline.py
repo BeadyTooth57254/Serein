@@ -389,7 +389,7 @@ async def job(database,batch,request,key,runner):
                 record_attempt(database,identifier,raw,reason)
                 progress(error=reason,attempt=attempt+1)
                 if not received or not isinstance(error,ValueError) or attempt==2:raise
-                correction='\n请按原角色规则纠正结构、长度或证据校验错误，只返回完整 JSON。保留人物归属、比喻及不确定程度，不按词句数量改写文风。编号使用原始编号，不得按展示位置重新编号。\n'+encode({'validation_error':reason,'allowed_ids':allowed_ids(request)})
+                correction='\n请按原角色规则纠正结构或证据校验错误，只返回完整 JSON。保留人物归属、比喻及不确定程度，不按词句数量改写文风。编号使用原始编号，不得按展示位置重新编号。\n'+encode({'validation_error':reason,'allowed_ids':allowed_ids(request)})
                 room=policy['max_prompt_chars']-len(request['rules'])-len(request['prompt'])-len(correction)-80
                 if room<0:raise ValueError('提示词上限不足以容纳纠错请求，请减小每批输入。') from error
                 prompt=request['prompt']+correction+'\n上一份不合格输出（仅用于纠错，可能截断）：\n'+raw[:min(room,10000)]

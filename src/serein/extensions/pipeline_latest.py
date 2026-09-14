@@ -561,12 +561,8 @@ def materialized_track_cards_payload(track_cards: list[dict[str, Any]] | None) -
         cards.append(card)
     return cards
 
-def event_body_limit(_legacy_importance: int | None=None) -> int:
-    return 320
-
 def build_event_writer_prompt(day: str, title: str, messages: list[dict[str, Any]], importance: int | None=None, track_context_events: list[dict[str, Any]] | None=None, context_messages: list[dict[str, Any]] | None=None, track_cards: list[dict[str, Any]] | None=None, source_activity_roles: dict[int, str] | None=None, previous_events: list[dict[str, Any]] | None=None) -> str:
     _ = importance
-    max_body_chars = event_body_limit()
     title_hint = f'事件提示：{title}' if str(title or '').strip() else '没有预设标题；请只根据绑定原文拟标题。'
     previous = []
     owned_ids = {int(item['id']) for item in messages}
@@ -582,13 +578,13 @@ def build_event_writer_prompt(day: str, title: str, messages: list[dict[str, Any
     reading_block = event_reading_block_payload(messages, context_messages, source_activity_roles=source_activity_roles)
     materialized_track_cards = materialized_track_cards_payload(track_cards)
     agent_rules = materialize_agent_rules('event_writer')
-    return f'[memory_phase: sol_event_writer]\n日期：{day}（Asia/Shanghai）\n{title_hint}\n\n{agent_rules}\n\n输出必须严格是：\n{{"evidence_sufficient":true,"recallable":true,"kept_details":["进入正文的辨识锚点"],"discarded_details":["owned 中彻底删除的旁支"],"self_review":{{"owned_evidence_sufficient":true,"owned_claims_only":true,"context_not_promoted":true,"referents_resolved":true,"identity_correct":true,"facts_and_causality_checked":true,"result_preserved":true}},"title":"短标题","event_draft":"自然连贯的第一人称 Event 正文"}}\n\n正文上限：{max_body_chars} 字。\n{WRITER_ATTACHMENT_RULE}\n\n<event_reading_block_json>\n{json.dumps(reading_block, ensure_ascii=False)}\n</event_reading_block_json>\n\n<materialized_track_cards_json>\n{json.dumps(materialized_track_cards, ensure_ascii=False)}\n</materialized_track_cards_json>\n\n<track_context_events_json>\n{json.dumps(context_events, ensure_ascii=False)}\n</track_context_events_json>\n\n<previous_events_json>\n{json.dumps(previous, ensure_ascii=False)}\n</previous_events_json>\n'
+    return f'[memory_phase: sol_event_writer]\n日期：{day}（Asia/Shanghai）\n{title_hint}\n\n{agent_rules}\n\n输出必须严格是：\n{{"evidence_sufficient":true,"recallable":true,"kept_details":["进入正文的辨识锚点"],"discarded_details":["owned 中彻底删除的旁支"],"self_review":{{"owned_evidence_sufficient":true,"owned_claims_only":true,"context_not_promoted":true,"referents_resolved":true,"identity_correct":true,"facts_and_causality_checked":true,"result_preserved":true}},"title":"短标题","event_draft":"自然连贯的第一人称 Event 正文"}}\n\n{WRITER_ATTACHMENT_RULE}\n\n<event_reading_block_json>\n{json.dumps(reading_block, ensure_ascii=False)}\n</event_reading_block_json>\n\n<materialized_track_cards_json>\n{json.dumps(materialized_track_cards, ensure_ascii=False)}\n</materialized_track_cards_json>\n\n<track_context_events_json>\n{json.dumps(context_events, ensure_ascii=False)}\n</track_context_events_json>\n\n<previous_events_json>\n{json.dumps(previous, ensure_ascii=False)}\n</previous_events_json>\n'
 
 def build_event_writer_repair_prompt(original_prompt, failed_result, violations):
-    return original_prompt+'\n请按原角色规则修正结构、长度和证据校验错误，保留同一 Event 的归属、人物、原话的比喻及不确定程度。不要新增事实、改变边界，或按词句次数机械改写。重新核对 self_review。\n'+json.dumps({'violations':violations,'failed_result':failed_result},ensure_ascii=False)
+    return original_prompt+'\n请按原角色规则修正结构和证据校验错误，保留同一 Event 的归属、人物、原话的比喻及不确定程度。不要新增事实、改变边界，或按词句数量机械改写文风。重新核对 self_review。\n'+json.dumps({'violations':violations,'failed_result':failed_result},ensure_ascii=False)
 
 
-def validate_event_writer_result(result: dict[str, Any], *, max_body_chars: int=320) -> list[str]:
+def validate_event_writer_result(result: dict[str, Any]) -> list[str]:
     title = str(result.get('title') or '').strip()
     body = str(result.get('event_draft') or '').strip()
     kept = [str(value).strip() for value in result.get('kept_details') or [] if str(value).strip()]
@@ -618,9 +614,6 @@ def validate_event_writer_result(result: dict[str, Any], *, max_body_chars: int=
     if not body:
         violations.append('正文为空')
         return violations
-    max_body_chars = min(max(1, int(max_body_chars)), 320)
-    if len(body) > max_body_chars:
-        violations.append(f'正文长度超过 {max_body_chars} 字：{len(body)}')
     if not 1 <= len(kept) <= 6:
         violations.append(f'kept_details 必须有 1–6 项：{len(kept)}')
     if not isinstance(result.get('discarded_details'), list):
