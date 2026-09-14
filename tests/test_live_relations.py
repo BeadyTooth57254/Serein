@@ -104,3 +104,17 @@ def test_pending_list_retires_obsolete_proposals_before_counting(live, change):
             assert store.conn.execute(f'SELECT status FROM {table} WHERE {field}=?',(proposal,)).fetchone()[0]==expected
     history=client.get('/api/scene-edge-proposals?status=all').json()
     assert history['proposals'][0]['status']==expected
+
+
+@pytest.mark.parametrize('evidence,ok',[('A',True),('A s',True),(' ',False),('missing',False)])
+def test_manual_relation_evidence_only_requires_nonempty_source_match(live,evidence,ok):
+    _,client=live
+    source=create(client,'Synthetic A','A synthetic shared moment.')
+    target=create(client,'Synthetic B','A synthetic second moment.')
+    result=client.post('/api/scene-edge-proposals/manual',json={
+        'source_scene_id':source,'target_scene_id':target,'relation_type':'echoes',
+        'source_evidence':evidence,'target_evidence':evidence,
+        'reason':'Echo','confirm':'CREATE_SCENE_EDGE_PROPOSAL'})
+    assert (result.status_code==200)==ok,result.text
+    proposals=client.get('/api/scene-edge-proposals').json()['proposals']
+    assert len(proposals)==(1 if ok else 0),proposals

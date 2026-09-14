@@ -38,10 +38,68 @@ def test_time_blocks_and_unknown_time_twenty_rounds_preserve_ids():
     with pytest.raises(ValueError,match='单轮'):blocks(unknown,max_chars=100)
 
 
+def test_import_boundary_keeps_concurrent_new_chats_and_retires_mixed_plan(settings,monkeypatch):
+    from serein.compat.raw_archive import raw_archive
+    from serein.compat.originals import Originals
+    data={'id':'imported-history','messages':[{'role':'user','content':'historical-'+'x'*55720},
+                                           {'role':'assistant','content':'historical reply'}]}
+    data['messages'] += [{'role':'user' if i%2==0 else 'assistant','content':'historical extra '+str(i)} for i in range(24)]
+    upload=stage(settings.database,json.dumps(data),'history.json','auto',False)
+    assert advance_import(settings,upload['id'])['processed']==25
+    # New chats can arrive while an import is in progress; never move a global cursor.
+    raw_archive(settings).ingest([{'source_event_id':str(i),'session_id':'new-chat','role':m['role'],
+        'text':'New synthetic dialogue '+str(i),'created_at':m['created_at']} for i,m in enumerate(pairs(5,True))],source='test')
+    assert advance_import(settings,upload['id'])['status']=='completed'
+    p.initialize(settings.database)
+    with Store(settings.database) as store:
+        imported=[r[0] for r in store.conn.execute("SELECT id FROM raw_events WHERE json_extract(metadata_json,'$.import_upload_id')=?",(upload['id'],))]
+        # Simulate a stale pre-upgrade plan which mixed archive-only and new rows.
+        all_rows=[p.message(r) for r in store.conn.execute('SELECT * FROM raw_events ORDER BY id')]
+        frozen={'contract':p.CONTRACT,'messages':all_rows,'routing_messages':all_rows,'scope':'old'}
+        store.conn.execute('INSERT INTO pipeline_batches(id,scope,input_json) VALUES (?,?,?)',('old-mixed','old',encode(frozen)))
+        store.conn.execute("DELETE FROM raw_processing WHERE outcome='archived_only'")
+    p.initialize(settings.database)  # Upgrade recovers historical import membership.
+    with Store(settings.database) as store:
+        assert store.conn.execute("SELECT status FROM pipeline_batches WHERE id='old-mixed'").fetchone()[0]=='superseded_import_boundary'
+        assert {r[0] for r in store.conn.execute('SELECT raw_id FROM raw_processing')}==set(imported)
+    batch=p.new_batch(settings.database,True)
+    assert batch and all(m['id'] not in imported for m in json.loads(batch['input_json'])['messages'])
+    calls=[]
+    async def routing(database,batch,data,runner):
+        calls.extend(m['id'] for m in data['routing_messages'])
+        return await original(database,batch,data,synthetic_runner)
+    original=p.route_batch
+    save_settings(settings.database,{'models':[{'id':'local','model':'synthetic','base_url':'http://127.0.0.1:9/v1'}],
+                                    'assignments':{'track_router':'local'}})
+    monkeypatch.setattr(p,'route_batch',routing)
+    asyncio.run(p.flush_routes(settings.database))
+    assert len(calls)==10 and not set(calls)&set(imported)
+    found=Originals(settings.database).source_message_search('historical',limit=50)['items']
+    assert len(found)==26
+    assert Originals(settings.database).source_message_read([found[-1]['id']])['items'][0]['content'].startswith('historical')
+
+
+def test_legacy_archive_only_originals_never_enter_daytime_routing(settings,monkeypatch):
+    from serein.compat.raw_archive import raw_archive
+    raw_archive(settings).ingest([{'source_event_id':str(i),'session_id':'old','role':m['role'],
+        'text':m['content'],'created_at':m['created_at']} for i,m in enumerate(pairs(5,True))],source='old-chat')
+    p.initialize(settings.database)
+    with Store(settings.database) as store:
+        store.conn.execute("INSERT INTO raw_processing SELECT id,'legacy-originals:synthetic','archived_only' FROM raw_events")
+    save_settings(settings.database,{'models':[{'id':'local','model':'synthetic','base_url':'http://127.0.0.1:9/v1'}],
+                                    'assignments':{'track_router':'local'}})
+    async def forbidden(*args):pytest.fail('Imported originals reached model routing')
+    monkeypatch.setattr(p,'route_batch',forbidden)
+    asyncio.run(p.flush_routes(settings.database))
+    assert p.new_batch(settings.database,True) is None
+
+
 def test_116_unknown_time_originals_are_processed_in_small_batches(settings):
     messages=[{'role':m['role'],'content':m['content']} for m in pairs(58)]
-    upload=stage(settings.database,json.dumps({'id':'one-session','messages':messages}),'conversation.json','auto',False)
-    while advance_import(settings,upload['id'])['status']!='completed':pass
+    # Seed raw dialogue directly; imported history now remains archive-only.
+    from serein.imports import parse_file, ImportArchive
+    data=parse_file(json.dumps({'id':'one-session','messages':messages}),'conversation.json',{'user_name':'User','ai_name':'AI'})
+    ImportArchive({'raw_events':{'db_path':str(settings.database)}}).ingest(data['entries'])
     tasks=[]
     async def runner(role,request):
         if role=='track_router':tasks.append(len(request['messages']))

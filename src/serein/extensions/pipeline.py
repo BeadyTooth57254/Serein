@@ -33,6 +33,15 @@ def initialize(database):
             CREATE TABLE IF NOT EXISTS pipeline_attempts(id INTEGER PRIMARY KEY,job_id TEXT NOT NULL,attempt INTEGER NOT NULL,
                 created_at TEXT NOT NULL,output_text TEXT NOT NULL,error TEXT NOT NULL);
         ''')
+        from ..imports import archive_imported_originals
+        archive_imported_originals(store.conn)
+        # Retire only the frozen plan that mixed in archive-only imports. Other
+        # originals remain eligible for a fresh plan; never mark the whole batch.
+        store.conn.execute("""UPDATE pipeline_batches SET status='superseded_import_boundary'
+            WHERE status IN ('pending','routing_only') AND EXISTS (
+                SELECT 1 FROM json_each(input_json,'$.routing_messages') m
+                JOIN raw_processing p ON p.raw_id=json_extract(m.value,'$.id')
+                WHERE p.outcome='archived_only')""")
         # Earlier preview jobs used a different output protocol. Keep the records,
         # restart only unfinished batches; already settled originals stay settled.
         store.conn.execute("UPDATE pipeline_batches SET status='superseded_protocol' WHERE status='pending' AND json_extract(input_json,'$.contract') IS NULL")
@@ -539,7 +548,7 @@ async def _flush_routes_frozen(database):
         upload=''
         if store.conn.execute("SELECT 1 FROM sqlite_master WHERE name='file_imports'").fetchone():
             upload=" AND (json_extract(r.metadata_json,'$.import_upload_id') IS NULL OR json_extract(r.metadata_json,'$.import_upload_id') IN (SELECT id FROM file_imports WHERE cursor=json_array_length(payload_json,'$.entries')))"
-        rows=[message(r) for r in store.conn.execute('SELECT r.* FROM raw_events r WHERE NOT EXISTS (SELECT 1 FROM pipeline_routes p WHERE p.raw_id=r.id)'+upload+' ORDER BY r.id')]
+        rows=[message(r) for r in store.conn.execute("SELECT r.* FROM raw_events r WHERE NOT EXISTS (SELECT 1 FROM pipeline_routes p WHERE p.raw_id=r.id) AND NOT EXISTS (SELECT 1 FROM raw_processing p WHERE p.raw_id=r.id AND p.outcome='archived_only')"+upload+' ORDER BY r.id')]
     sessions={}
     for row in rows:sessions.setdefault((row['source'],row['original_session_id']),[]).append(row)
     current=datetime.now(timezone.utc)

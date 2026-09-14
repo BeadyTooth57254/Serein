@@ -105,9 +105,8 @@ async def _update_scene_jobs(settings, linker):
                             'candidate_not_allowed': 'Scene ID 不在候选中', 'relation_not_allowed': '关系类型无效',
                             'symmetric_orientation_required': '对称关系的方向不匹配',
                             'directed_orientation_required': '有向关系缺少有效方向',
-                            'confidence_below_threshold': '置信度低于门槛',
                             'reason_missing': '缺少关联理由',
-                            'evidence_not_verbatim': '证据不足 6 字或未匹配原文'}
+                            'evidence_not_verbatim': '证据为空或未匹配原文'}
                         reasons.extend(dict.fromkeys(rejection_labels.get(r.get('reason'), r.get('reason','未知原因'))
                             for a in attempts for r in a.get('rejections', [])))
                         state.update(status='failed', attempts=attempts,

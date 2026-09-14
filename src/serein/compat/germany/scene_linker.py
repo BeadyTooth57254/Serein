@@ -533,7 +533,7 @@ orientation 规则：
 - echoes / contrasts_with 必须是 symmetric；
 - 其他关系必须是 candidate_to_new 或 new_to_candidate。
 
-没有可靠关系时返回 {"edges": []}。零条是正常结果，不要为了凑数量连边，也不要为了越过门槛抬高 confidence；它是模型判断，不是经过校准的准确率。
+没有可靠关系时返回 {"edges": []}。零条是正常结果，不要为了凑数量连边，不要夸大 confidence；它仅供参考和排序，不是经过校准的准确率。
 同一个 candidate_scene_id 最多返回一条边；如果多个关系都勉强成立，只选最具体、证据最强的一条。
 只返回 JSON：
 {
@@ -640,7 +640,7 @@ def _evidence_is_verbatim(content: str, evidence: Any) -> tuple[bool, str]:
     excerpt = _evidence_text(evidence)
     compact_excerpt = re.sub(r"\s+", "", excerpt)
     compact_content = re.sub(r"\s+", "", str(content or ""))
-    if len(compact_excerpt) < 6:
+    if not compact_excerpt:
         return False, excerpt
     return compact_excerpt in compact_content, excerpt[:180]
 
@@ -1672,7 +1672,6 @@ class SceneLinker:
         self.recent_candidates = max(0, min(int(cfg.get("recent_candidates", 4)), 20))
         self.max_candidates = max(1, min(int(cfg.get("max_candidates", 10)), 24))
         self.max_proposals = max(1, min(int(cfg.get("max_proposals", 3)), 6))
-        self.min_confidence = max(0.0, min(float(cfg.get("min_confidence", 0.78)), 1.0))
         self.source_chars = max(500, min(int(cfg.get("source_chars", 2600)), 8000))
         self.candidate_chars = max(300, min(int(cfg.get("candidate_chars", 1200)), 4000))
         self.candidate_timeout_seconds = max(
@@ -2228,8 +2227,6 @@ class SceneLinker:
         proposal: dict,
         anchor: dict | None,
         candidate: dict | None,
-        *,
-        min_confidence: float,
     ) -> str:
         if not isinstance(anchor, dict):
             return "anchor_scene_missing"
@@ -2262,8 +2259,6 @@ class SceneLinker:
             return "symmetric_directionality_required"
         if relation not in SYMMETRIC_SCENE_RELATIONS and directionality != "directed":
             return "directed_directionality_required"
-        if _clamp(proposal.get("confidence")) < min_confidence:
-            return "confidence_below_current_threshold"
 
         scene_map = {anchor_id: anchor, candidate_id: candidate}
         source = scene_map.get(source_id)
@@ -2343,7 +2338,6 @@ class SceneLinker:
                 row,
                 anchor,
                 candidate,
-                min_confidence=self.min_confidence,
             )
             payloads.append(
                 {
@@ -2441,7 +2435,6 @@ class SceneLinker:
                 proposal,
                 anchor,
                 candidate,
-                min_confidence=self.min_confidence,
             )
             if snapshot_error:
                 return {
@@ -2620,9 +2613,6 @@ class SceneLinker:
                 else:
                     source_scene_id, target_scene_id = anchor_id, candidate_id
             confidence = _clamp(item.get("confidence"))
-            if confidence < self.min_confidence:
-                rejected.append({"reason": "confidence_below_threshold", "candidate": candidate_id})
-                continue
             reason = re.sub(r"\s+", " ", str(item.get("reason") or "").strip())[:360]
             if not reason:
                 rejected.append({"reason": "reason_missing", "candidate": candidate_id})

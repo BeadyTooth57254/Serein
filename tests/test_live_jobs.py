@@ -150,12 +150,12 @@ def test_scene_response_accepts_valid_edges_without_rejecting_whole_response(liv
     target=create(client,'Synthetic B','Another synthetic memory beside the window.')
     reader=SceneReader(settings.database)
     anchor=asyncio.run(reader.get(source));candidate=asyncio.run(reader.get(target))
-    linker=SceneLinker({'serein_database':str(settings.database),'scene_linker':{'enabled':True,'auto_enabled':True}})
+    linker=SceneLinker({'serein_database':str(settings.database),'scene_linker':{'enabled':True,'auto_enabled':True,'min_confidence':0.99}})
     linker.providers=[{'name':'synthetic','model':'synthetic','client':object()}]
     linker._candidate_scenes=AsyncMock(return_value=[candidate])
-    edge={'candidate_scene_id':target,'relation_type':'echoes','orientation':'symmetric','confidence':0.99,
+    edge={'candidate_scene_id':target,'relation_type':'echoes','orientation':'symmetric','confidence':0.0,
           'reason':'雨声回响',
-          'new_scene_evidence':anchor['content'],'candidate_scene_evidence':candidate['content']}
+          'new_scene_evidence':'A','candidate_scene_evidence':'A'}
     invalid={**edge,'candidate_scene_id':'not-an-allowed-scene'}
     linker._call_provider=AsyncMock(return_value={'edges':([edge] if valid else [])+[invalid]})
     result=asyncio.run(linker.link_scene(source,reader))
@@ -163,6 +163,15 @@ def test_scene_response_accepts_valid_edges_without_rejecting_whole_response(liv
     assert result.get('proposal_count',0)==(1 if valid else 0)
     assert result['attempts'][0]['rejections']==[{'reason':'candidate_not_allowed','candidate':'not-an-allowed-scene'}]
     assert linker._call_provider.await_count==1
+    if valid:
+        proposals=client.get('/api/scene-edge-proposals').json()['proposals']
+        assert len(proposals)==1,proposals
+        assert proposals[0]['confidence']==0.0
+        accepted=client.post('/api/scene-edge-proposals/review',json={
+            'proposal_id':proposals[0]['proposal_id'],'decision':'accept','confirm':'ACCEPT_SCENE_EDGE'})
+        assert accepted.status_code==200,accepted.text
+        assert accepted.json()['status']=='accepted',accepted.text
+        assert len(client.get('/api/scene-edges').json()['edges'])==1
 
 
 def test_scene_worker_and_manual_retry_cannot_duplicate_inflight_request(live):

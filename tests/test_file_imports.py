@@ -64,7 +64,7 @@ def test_upload_preview_resume_and_no_processing_partial_file(settings):
     from serein.work_tasks import execute, work
     result=asyncio.run(execute(settings.database,queued['id'],lambda:work(settings,queued['id'],{}),queued_id=queued['run_id']))
     assert result['inserted']==28 and result['status']=='completed'
-    assert asyncio.run(advance(settings.database,include_recent=True))['status']=='awaiting_agent'
+    assert asyncio.run(advance(settings.database,include_recent=True))['status']=='current'
     same=stage(settings.database,body,'renamed.json','auto',True)
     assert same['id']==preview['id'] and same['inserted']==28
     with Store(settings.database) as store:

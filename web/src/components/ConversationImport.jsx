@@ -63,7 +63,7 @@ export function ConversationImport({onImported}) {
   }
   return <div className="conversation-import">
     <div className="settings-group__heading"><h4>对话与记忆导入</h4>
-      <p>聊天记录先进入原话整理区；Operit 记忆备份逐条保留为 Scene，正文不改写。</p></div>
+      <p>历史聊天仅归档，自动整理从后续新聊天开始；Operit 记忆备份逐条保留为 Scene，正文不改写。</p></div>
     <label className="settings-field"><span>文件类型</span><select disabled={busy} value={mode} onChange={event=>setMode(event.target.value)}>
       <option value="auto">自动识别</option><option value="conversation">聊天记录</option><option value="operit">Operit 记忆库</option></select></label>
     <label className="settings-toggle"><span><strong>Operit 导入后自动打标</strong>
@@ -80,6 +80,7 @@ export function ConversationImport({onImported}) {
       {history.map(item=><option key={item.id} value={item.id}>{item.filename} · {item.processed}/{item.total}</option>)}</select></label>}
     {job&&<div className="import-preview">
       <p><strong>{job.filename}</strong> · {job.format==='operit'?'Operit 记忆库':`${job.sessions} 个对话`} · {job.total} 条</p>
+      {job.format!=='operit'&&<p className="import-help">历史聊天仅归档，可搜索、读取和绑定证据；自动归线与 Event 整理只处理后续新增聊天。</p>}
       {job.warnings.map((message,index)=><p key={index} className="import-help">{message}</p>)}
       <details><summary>查看内容预览</summary>{job.preview.map((item,index)=><blockquote key={index}>
         <strong>{item.title || (item.role==='user'?'用户':'AI')}</strong><p>{item.text}</p></blockquote>)}</details>

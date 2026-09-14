@@ -161,6 +161,18 @@ def initialize_imports(database):
             CREATE TABLE IF NOT EXISTS import_tag_jobs (document_id TEXT PRIMARY KEY,body_hash TEXT NOT NULL,upload_id TEXT NOT NULL,
                 status TEXT NOT NULL DEFAULT 'pending',attempts INTEGER NOT NULL DEFAULT 0,error TEXT NOT NULL DEFAULT '');
         ''')
+        archive_imported_originals(store.conn)
+
+
+def archive_imported_originals(conn):
+    """Import membership, not a global cursor: concurrent new chats stay eligible."""
+    tables={row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    if not {'file_imports','raw_events'}<=tables:return
+    conn.execute('CREATE TABLE IF NOT EXISTS raw_processing(raw_id INTEGER PRIMARY KEY,operation_id TEXT NOT NULL,outcome TEXT NOT NULL)')
+    conn.execute("""INSERT OR IGNORE INTO raw_processing(raw_id,operation_id,outcome)
+        SELECT r.id,'file-import:' || f.id,'archived_only' FROM raw_events r
+        JOIN file_imports f ON f.id=json_extract(r.metadata_json,'$.import_upload_id')
+        WHERE NOT EXISTS (SELECT 1 FROM raw_processing p WHERE p.raw_id=r.id)""")
 
 
 def report(row):
@@ -249,6 +261,7 @@ def advance_import(settings,identifier):
             counts[status]+=1
         except (ValueError,KeyError) as exc:errors.append({'entry':start+offset+1,'message':str(exc)[:250]})
     with Store(settings.database) as store,store.transaction(immediate=True):
+        archive_imported_originals(store.conn)
         store.conn.execute('UPDATE file_imports SET cursor=?,inserted=inserted+?,duplicate=duplicate+?,errors_json=? WHERE id=? AND cursor=?',
             (start+len(batch),counts['inserted'],counts['duplicate'],encode(errors),identifier,start))
         return report(store.conn.execute('SELECT * FROM file_imports WHERE id=?',(identifier,)).fetchone())
