@@ -167,6 +167,50 @@ def test_query_prefixes_and_operit_context_are_not_user_speech():
     assert context._extract_current_turn_user_query([{'role':'user','content':text},{'role':'tool','content':'result','tool_call_id':'tool-a'}])==''
 
 
+@pytest.mark.parametrize('content,expected', [
+    ('<worldbook><entry name="A">Old topic</entry><entry name="B">Other topic</entry></worldbook>Current question', 'Current question'),
+    ('Before<worldbook>\n<entry name="A">First\nSecond</entry>\n<entry name="B">Third</entry>\n</worldbook>After', 'Before\nAfter'),
+    ('<worldbook><entry name="A">Old</entry></worldbook>Question<worldbook><entry name="B">Other</entry></worldbook>', 'Question'),
+    ('<WORLDBOOK source="opr"><entry name="A">Injected</entry></WORLDBOOK >Question', 'Question'),
+    ('<worldbook><entry name="A">Only context</entry><entry name="B">More context</entry></worldbook>', ''),
+    ([{'type':'text','text':'<worldbook><entry name="A">Context</entry>'},
+      {'type':'input_text','text':'<entry name="B">More</entry></worldbook>Question'},
+      {'type':'image_url','image_url':{'url':'https://example.invalid/synthetic.png'}}], 'Question'),
+    ('Keep <entry name="example">ordinary text outside worldbook</entry>', 'Keep <entry name="example">ordinary text outside worldbook</entry>'),
+    ('<proxy_sender name="phone"/>【系统提示】<worldbook><entry name="A">【当前天气】Synthetic</entry></worldbook>Question\n<attachment>App context</attachment>', 'Question'),
+])
+def test_worldbook_envelopes_are_excluded_from_recall_query(content, expected):
+    from copy import deepcopy
+    messages = [{'role':'user','content':content}]
+    original = deepcopy(messages)
+    assert ClientContext()._extract_current_turn_user_query(messages) == expected
+    assert messages == original
+
+
+@pytest.mark.parametrize('operit_enabled', [False, True])
+@pytest.mark.parametrize('question', ['', 'Current reading question'])
+def test_proxy_worldbook_is_not_a_recall_query_but_still_reaches_upstream(deployment, monkeypatch, operit_enabled, question):
+    settings, client = deployment
+    assert configure(client, operit_enabled=operit_enabled).is_success
+    monkeypatch.setattr('serein.configured_models.memory_ready', lambda settings: True)
+    queries, forwarded = [], []
+    def recall(self, query, **options):
+        queries.append(query)
+        return {'context':'', 'selected_refs':[]}
+    async def complete(model, payload, **options):
+        forwarded.append(payload['messages'][-1]['content'])
+        return {'choices':[{'message':{'role':'assistant','content':'Synthetic reply'}}]}
+    monkeypatch.setattr('serein.application.Services.recall', recall)
+    monkeypatch.setattr('serein.api.chat.complete', complete)
+    worldbook = '<worldbook>\n<entry name="A">Synthetic old topic</entry>\n<entry name="B">Synthetic character context</entry>\n</worldbook>'
+    original = worldbook + question
+    response = client.post('/v1/chat/completions', json={
+        'messages':[{'role':'user','content':original}], 'serein':{'memory':True,'window_id':'worldbook-test'}})
+    assert response.status_code == 200, response.text
+    assert queries == ([question] if question else [])
+    assert forwarded == [original]
+
+
 def test_proxy_replays_prefix_and_reasoning_on_tool_continuation(deployment,monkeypatch):
     settings,client=deployment
     assert configure(client).is_success

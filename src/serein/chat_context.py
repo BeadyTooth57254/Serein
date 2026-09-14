@@ -31,6 +31,11 @@ WORKSPACE_ATTACHMENT_RE = re.compile(
     re.IGNORECASE,
 )
 
+WORLDBOOK_RE = re.compile(
+    r"<worldbook\b[^>]*>[\s\S]*?</worldbook\s*>",
+    re.IGNORECASE,
+)
+
 LEADING_PROXY_SENDER_RE = re.compile(
     r"^\s*<proxy_sender\b[^>]*/>\s*",
     re.IGNORECASE,
@@ -281,6 +286,9 @@ class ClientContext:
             if role != "user":
                 return ""
             content = self._coerce_message_text(message.get("content"))
+            # A worldbook can contain many entries. Exclude the whole envelope
+            # from recall while preserving the original message for forwarding.
+            content = WORLDBOOK_RE.sub("\n", content)
             cleaned = self._strip_external_context_from_user_text(content)
             if cleaned:
                 return cleaned
