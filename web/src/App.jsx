@@ -40,6 +40,7 @@ const readAreaFromHash = () => {
 export function App() {
   const root = useRef(null);
   const [activeArea, setActiveArea] = useState(readAreaFromHash);
+  const [helpPage, setHelpPage] = useState(null);
   const [, refreshIdentity] = useState(0);
   useEffect(() => {
     const update = () => refreshIdentity(value => value + 1);
@@ -97,6 +98,7 @@ export function App() {
     }
 
     if (label === "设置" && activeArea !== "设置") settingsOrigin.current = activeArea;
+    if (label === "使用说明") setHelpPage(null);
     if (label === activeArea && label !== "醒来") return;
     if (label === "花园" && activeArea !== "花园") {
       gardenOrigin.current = { area: activeArea, scroll: window.scrollY };
@@ -137,12 +139,13 @@ export function App() {
         awakeEntry={awakeEntry}
         onShowCover={() => navigateTo("醒来", 0, "cover")}
         onSettingsOpenChange={setSettingsOpen}
+        onOpenEventGuide={() => { navigateTo("使用说明"); setHelpPage("events"); }}
       />
 
       {activeArea === "使用说明" && <section className="help-page" aria-label="使用说明">
         <div className="settings-panel settings-page">
           <header className="settings-panel__header"><div><span>SEREIN</span><h2>使用说明</h2></div></header>
-          <div className="settings-panel__body"><UsageGuide onOpenSettingsTab={(tab) => {
+          <div className="settings-panel__body"><UsageGuide initialPage={helpPage} onOpenSettingsTab={(tab) => {
             window.dispatchEvent(new CustomEvent("serein:open-settings-tab", { detail: tab }));
             navigateTo("设置");
           }} /></div>

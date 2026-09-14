@@ -42,6 +42,7 @@ export function AwakePage({
   awakeEntry,
   onShowCover,
   onSettingsOpenChange,
+  onOpenEventGuide,
 }) {
   const compositionRef = useRef(null);
   const shadowTriggerRef = useRef(null);
@@ -694,6 +695,7 @@ export function AwakePage({
       {settingsOpen && <Sidebar activeArea="设置" onNavigate={navigateFromAwake} onOpenSettings={() => {}} />}
       <SettingsPanel
         open={settingsOpen}
+        onOpenEventGuide={onOpenEventGuide}
         onClose={() => onSettingsOpenChange(false)}
         coverSettings={coverSettings}
         onCoverSetting={updateCoverSetting}

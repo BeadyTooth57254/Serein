@@ -12,6 +12,7 @@ const tabs = [["appearance", "外观"], ["features", "功能"], ["models", "模�
 export function SettingsPanel({
   open,
   onClose,
+  onOpenEventGuide,
   coverSettings,
   onCoverSetting,
   identityNames,
@@ -225,7 +226,7 @@ export function SettingsPanel({
           </section>
           </div>
           <div role="tabpanel" id="settings-content-features" aria-labelledby="settings-tab-features" aria-hidden={tab !== "features"} inert={tab !== "features"}>
-            {open && <FeatureSettings onOpenSummary={openSummary} />}
+            {open && <FeatureSettings onOpenSummary={openSummary} onOpenEventGuide={onOpenEventGuide} />}
           </div>
           {open && <ModelSettings page={tab} summaryRequest={summaryRequest} recallThreshold={recallThreshold} setRecallThreshold={setRecallThreshold}
             passageDraft={passageDraft} setPassageDraft={setPassageDraft} onOpenPipeline={()=>showTab("imports")} onOpenCatalog={()=>showTab("models")} onOpenAssignments={()=>showTab("configuration")} />}

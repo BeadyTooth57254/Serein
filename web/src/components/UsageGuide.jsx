@@ -1,8 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
-const tabs = [["start", "开始"], ["favorites", "收藏"], ["connect", "接入"], ["source", "原话"], ["install", "一键安装"], ["migration", "迁移"], ["passages", "长文分段"]];
+const tabs = [["start", "开始"], ["favorites", "收藏"], ["connect", "接入"], ["source", "原话"], ["install", "一键安装"], ["migration", "迁移"], ["passages", "长文分段"], ["events", "自动 Event"]];
 const settings = { appearance: "外观", features: "功能", models: "模型", configuration: "配置", imports: "对话导入", migration: "旧库迁移" };
 const hookSnippet = `\`\`\`python
 from examples.hook_host import SereinHook
@@ -48,15 +48,18 @@ ${launch}
 \`q\` 退出主菜单，子菜单用 \`r\` 返回；退出菜单不等于停服。**部署失败保持服务停止，不会自动回退**。修复当前步骤后，在同一目录重试。`;
 }
 
-export function UsageGuide({ onOpenSettingsTab }) {
+export function UsageGuide({ onOpenSettingsTab, initialPage }) {
   const [location, setLocation] = useState(null);
   const hookExamplePath = location?.root
     ? `${location.root.replace(/[\\/]+$/, "")}${/^[A-Za-z]:/.test(location.root) ? "\\" : "/"}examples${/^[A-Za-z]:/.test(location.root) ? "\\" : "/"}hook_host.py`
     : "examples/hook_host.py";
-  const [active, setActive] = useState(0);
+  const [active, setActive] = useState(() => Math.max(0, tabs.findIndex(([key]) => key === initialPage)));
   const pages = useRef(null);
   const snapTimer = useRef(null);
   const targetPage = useRef(null);
+  useLayoutEffect(() => {
+    if (pages.current) pages.current.scrollTo({ left: pages.current.clientWidth * active, behavior: "instant" });
+  }, []);
   useEffect(() => {
     const controller = new AbortController();
     fetch("/__serein/install-location", { signal: controller.signal })
@@ -191,6 +194,18 @@ export function UsageGuide({ onOpenSettingsTab }) {
       <p>同一模型下再按，会复用当前有效的正文向量、已有分段及分段向量，只补缺失项，不重写记忆、不全库重切。但仍会重新探测维度、计算路由例句向量、扫描记忆并更新实体索引，有模型调用和服务器开销，不是无成本的刷新。</p>
       <p>更换 Embedding 会使用新模型的独立索引，重新生成正文及分段向量。已保存的共享布局可以复用；历史分段尚未迁入共享布局时不保证复用。修改起切字数不改变旧布局，包括原来无需分段的空布局；重复准备也不会让这些旧短文自动重切。</p>
       <p>首次给旧记忆开启 Passage，或确认有缺失向量时，可显式准备补齐；当前后台尚不能独立捡起空队列之外的历史缺口。准备期间会暂时撤下检索就绪标记，失败需重试完成。平时检索正常，不必反复点击。</p>
+    </section>
+    <section className="settings-group usage-guide__page" {...page(7)}>
+      <div className="settings-group__heading"><h3>自动 Event 会调用哪些模型</h3><p>开关允许后台处理后续新聊天，不等于打开时立刻调用，也不是每轮固定三次。</p></div>
+      <p>聊天完整成功后，用户和助手原话先进入档案；这一步不调用整理模型。文件导入和旧库迁移的历史原话只归档，可搜索、读回和手动绑定证据，不会因打开自动摘要而批量生成 Event。</p>
+      <ol>
+        <li><strong>归线（Track Router）</strong>：白天同一会话累计至少五轮完整问答，并有二十分钟停顿后，按批调用归线模型；只记录话题归属，不写 Event。若白天未归线，凌晨结算时仍可能先调用它。</li>
+        <li><strong>切分与转录（Curator）</strong>：上海时间凌晨三点后，对待结算的 Track 材料按关联组调用模型，判断哪些原话构成 Event、哪些跳过或暂缓；有图片时还读取图片并转录可见文字。</li>
+        <li><strong>Event Writer</strong>：每条拟写的 Event 分别调用写作模型，结合原话、必要前情和已有 Event 生成正文；跳过或暂缓的材料不写。<strong>建议给 Event Writer 选理解上下文和写作能力较强的模型</strong>，它要处理人物归属、因果、修订与细节取舍，不只是压缩摘要。</li>
+      </ol>
+      <p>调用次数随批次数、关联组数和拟写 Event 数变化。Curator 或 Writer 判断前情不足时，各可额外补读一次；Writer 补读若带来图片，还可能多一次图片转录。模型已返回但 JSON、长度或证据校验不合格时，单次执行最多再请求两次纠错。上游报错、超时或最终校验失败会留下未完成任务；自动整理仍开启时，后台约每 30 秒再检查并可能重新调用同一阶段，因此<strong>不是总共最多三次</strong>，持续失败可能持续产生费用。已验收的阶段结果保留，不从头重跑；若看到反复失败，请先关闭自动摘要，再检查模型、输入和失败记录。</p>
+      <p>在<SettingsLink tab="configuration" onOpen={onOpenSettingsTab}>配置</SettingsLink>选择 API 时，由 Serein 向各阶段所选上游发请求；选 Agent 时，由已认证的外部执行器领取任务，实际模型调用和费用取决于它的实现。生成 Event 后，若启用了打标或检索索引，后台还可能分别调用打标模型或 Embedding；它们不属于上述三阶段。关闭自动摘要会停止定时整理调用，但原话仍保存，手动“继续整理”和其他独立功能仍可能调用各自模型。</p>
+      <p>模型结果可能有遗漏或误解；重要 Event 请对照绑定原话核对。三阶段选择、执行方式及模型超时在<SettingsLink tab="configuration" onOpen={onOpenSettingsTab}>配置页</SettingsLink>，上游地址与密钥在<SettingsLink tab="models" onOpen={onOpenSettingsTab}>模型页</SettingsLink>。</p>
     </section>
     </div>
   </div>;

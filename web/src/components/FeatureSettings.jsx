@@ -17,7 +17,7 @@ const features = {
   resume:['开窗续接（resume）','新窗口或发送 /resume 时，按下面的选择带入内容。'],
 };
 
-export function FeatureSettings({onOpenSummary}) {
+export function FeatureSettings({onOpenSummary,onOpenEventGuide}) {
   const [values,setValues]=useState(null),[selection,setSelection]=useState({}),[status,setStatus]=useState(''),[busy,setBusy]=useState(false),[autoEnabled,setAutoEnabled]=useState(false);
   useEffect(()=>{let active=true;instanceSettings().then(value=>{if(active){setValues(value.features);setSelection(value.resume);setAutoEnabled(value.pipeline.auto_enabled!==false);}})
     .catch(error=>{if(active)setStatus(error.message);});return()=>{active=false;};},[]);
@@ -28,8 +28,9 @@ export function FeatureSettings({onOpenSummary}) {
   }
   return <section className="settings-group"><div className="settings-group__heading"><h3>可选功能</h3><p>按需开启，保存后生效。</p></div>
     {values&&<form onSubmit={save}>
-      <div className="settings-toggle"><span><strong id="automatic-summary-label">自动摘要</strong><small>自动把原话归类、整理为 Event。关闭后保留配置和进度，仍可手动继续。</small>
-        <button type="button" className="settings-link" onClick={onOpenSummary}>自动摘要配置</button></span>
+      <div className="settings-toggle"><span><strong id="automatic-summary-label">自动摘要</strong><small>自动把新聊天归线、整理为 Event，会按待处理材料调用模型；关闭后保留配置和进度，仍可手动继续。</small>
+        <button type="button" className="settings-link" onClick={onOpenSummary}>自动摘要配置</button>{' · '}
+        <button type="button" className="settings-link" onClick={onOpenEventGuide}>了解模型调用与费用</button></span>
         <input type="checkbox" role="switch" aria-labelledby="automatic-summary-label" disabled={busy} checked={autoEnabled} onChange={event=>setAutoEnabled(event.target.checked)}/></div>
       {Object.entries(features).map(([key,[label,help]])=><label className="settings-toggle" key={key}>
       <span><strong>{label}</strong><small>{help}</small></span><input type="checkbox" role="switch" aria-label={label} disabled={busy} checked={!!values[key]}

@@ -95,6 +95,7 @@ export function ModelSettings({page,summaryRequest=0,onOpenPipeline,onOpenCatalo
         <select value={config.assignments[key] || ""} onChange={event=>setConfig(current=>({...current,assignments:{...current.assignments,[key]:event.target.value}}))}>
           <option value="">未选择</option>{taskModelOptions(availableModels,config.assignments,key).map(model=><option key={model.id} value={model.id}>{model.upstream_name}/{model.label || model.model || "新模型"}</option>)}
         </select></label>)}</div>
+      <p className="model-connection-help">Event Writer 要核对原话、人物、因果和修订，再写出自然正文；建议为“原话 · Event 写作”选择理解和写作能力较强的模型。</p>
       <p className="model-connection-help">“打标”为事件和 Scene 补充主域大标签、提取有原文出处的实体，也为长记忆已有的 cues 绑定 passage。已有主域和正文保持不变；实体别名只留作建议。主域与短描述在地下室的“主域边界”管理。</p>
       {config.assignments.dreams&&<><label className="settings-field"><span>每日做梦概率（%）</span>
         <input type="number" min="0" max="100" step="1" value={Math.round((config.dream?.daily_probability??0.4)*100)}
