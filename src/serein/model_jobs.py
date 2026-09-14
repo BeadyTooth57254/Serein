@@ -1,4 +1,4 @@
-"""Start only optional tasks explicitly selected on the instance settings page."""
+"""Run the model-selected jobs and the model-free Arc revision check."""
 import asyncio
 import logging
 from .deployment import read_settings, configured_models
@@ -20,11 +20,14 @@ async def run(application):
     try:
         while True:
             config=read_settings(settings.database)
-            for feature in ('relations','dreams','narrative_scout','event_pipeline','operit_tagging'):
-                if feature in application.enabled_extensions:continue
+            for feature in ('relations','dreams','narrative_revision','event_pipeline','operit_tagging'):
+                if feature in application.enabled_extensions or (feature == 'narrative_revision' and
+                        'narrative_scout' in application.enabled_extensions):continue
                 selected=config['assignments'].get(feature)
                 model=next((item for item in configured_models(config) if item['id']==selected),None)
                 signature=encode(model) if model else ''
+                if feature=='narrative_revision':
+                    signature='program-check'
                 if feature=='event_pipeline':
                     selected_models=[item for item in configured_models(config) if item['id'] in
                                      [config['assignments'].get(role) for role in ROLES]]

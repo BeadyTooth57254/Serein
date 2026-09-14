@@ -21,8 +21,6 @@ dream:
   # Set SEREIN_DREAM_API_KEY in the host environment.
 narrative_rolls:
   revision_scan_enabled: true
-  new_roll_scout_enabled: true
-  new_roll_scout_model: your-model
-  new_roll_scout_base_url: https://models.example/v1
-  new_roll_scout_api_key_env: SEREIN_SCOUT_KEY
-  scout_role_file: ../web/codex_agents/narrative_scout/AGENTS.md
+  revision_scan_timezone: Asia/Shanghai
+  revision_scan_hour: 4
+  revision_scan_minute: 0

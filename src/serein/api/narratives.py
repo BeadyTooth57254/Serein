@@ -182,8 +182,6 @@ def routes(settings, auth):
     @router.post('/api/narrative-revision-inbox/scan')
     async def scan(body: dict):
         from ..compat.scout import Scout
-        return await Scout(settings)._scan_narrative_revision_inbox(
-            include_external=bool(body.get('include_external',True)),
-            force_external=bool(body.get('force_external',False)))
+        return await Scout(settings)._scan_narrative_revision_inbox()
 
     return router

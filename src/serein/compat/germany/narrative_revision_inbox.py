@@ -507,7 +507,6 @@ class NarrativeRevisionInbox:
         with self._lock:
             raw = self._load()
             raw["scan"] = {
-                **(raw.get("scan") if isinstance(raw.get("scan"), dict) else {}),
                 **dict(result),
                 "last_scan_at": _now_utc(),
             }
@@ -575,6 +574,7 @@ class NarrativeRevisionInbox:
         status: str = "pending",
         narrative_id: str = "",
         limit: int = 50,
+        exclude_proposal_kind: str = "",
     ) -> dict[str, Any]:
         safe_status = str(status or "pending").strip().lower()
         if safe_status not in _STATUS_VALUES | {"all"}:
@@ -583,6 +583,8 @@ class NarrativeRevisionInbox:
         safe_limit = max(1, min(int(limit or 50), 200))
         with self._lock:
             items = [dict(item) for item in self._load()["items"] if isinstance(item, dict)]
+        if exclude_proposal_kind:
+            items = [item for item in items if item.get('proposal_kind') != exclude_proposal_kind]
         if safe_status != "all":
             items = [item for item in items if str(item.get("status") or "") == safe_status]
         if safe_narrative_id:

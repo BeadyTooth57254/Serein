@@ -71,8 +71,10 @@ def test_save_line_is_idempotent_then_material_save_and_first_body_publish(live)
             document_sha256=line['document_sha256'],body=body,material_snapshot_sha256_value=seal['material_snapshot_sha256'])})
     assert saved.status_code==200,saved.text
     assert read()['body']==body and read()['publication_status']=='reviewed'
-    inbox=client.get('/api/narrative-revision-inbox?status=all').json()['items']
-    assert next(p for p in inbox if p['proposal_id']=='nrev_test')['resolution']=='written'
+    assert client.get('/api/narrative-revision-inbox?status=all').json()['items'] == []
+    with narrative_transaction(settings.database) as rolls:
+        inbox = RevisionInbox(rolls.store)._load()['items']
+        assert next(p for p in inbox if p['proposal_id']=='nrev_test')['resolution']=='written'
 
 
 def test_published_material_is_not_withdrawn_by_a_freshness_hint(live):

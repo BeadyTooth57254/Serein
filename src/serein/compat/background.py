@@ -26,11 +26,6 @@ def germany_config(settings):
     if selected:
         result['dream']={**config.get('dream',{}),'enabled':True,'auto_enabled':True,
             'model':selected['model'],'base_url':'','api_key':''}
-    selected=task_model(settings.database,'narrative_scout')
-    if selected:
-        result['narrative_rolls']={**config.get('narrative_rolls',{}),'revision_scan_enabled':True,
-            'new_roll_scout_enabled':True,'new_roll_scout_model':selected['model'],
-            'new_roll_scout_base_url':selected['base_url']}
     return result
 
 

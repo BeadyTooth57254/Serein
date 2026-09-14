@@ -115,6 +115,8 @@ export function UsageGuide({ onOpenSettingsTab }) {
       <p>需要审核时仍可用 <code>propose_memory</code>，在 draft 中填写 title、body_md、cues、date，接受候选后才正式保存。Event 由原话整理流程生成；叙事卷正文走 <code>narrative_volume</code>，开启“主模型读写叙事卷”后，由主模型读取材料、自己写正文、预览并保存，不额外调用 Writer 模型。</p>
       <h4>把 Event 写成自己的 Scene</h4>
       <p>在功能页开启“Event 升为 Scene”并保存后，主窗口可以用 <code>read_memory</code> 读取摘要和绑定原话，自己改好标题、正文，再调用 <code>promote_event_to_scene</code>，传 Event ID、当前版本和改好的文字。工具保留 Event 原件及原话绑定，生成关联 Scene；原 Event 不再自动浮现，也不进入叙事卷修订箱。这一步不会自动执行。关闭开关会停用工具，已有内容保留。</p>
+      <h4>Arc 的修订提醒</h4>
+      <p>修订箱每天凌晨四点后由程序检查已有 Arc 的关联材料是否比卷的发布时间更新，不用为修订箱选模型。旧版模型生成的待处理成卷候选会在下次扫描时退出队列，历史内容保留。要开启新主题，在叙事卷页输入主题手动找材料；这一步才使用<SettingsLink tab="configuration" onOpen={onOpenSettingsTab}>配置页</SettingsLink>里的“叙事卷找材料”模型。</p>
     </section>
     <section className="settings-group usage-guide__page" {...page(1)}>
       <div className="settings-group__heading"><h3>收藏的记忆</h3></div>

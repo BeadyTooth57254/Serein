@@ -40,14 +40,14 @@ async def update_scene_jobs(settings, linker):
 class BackgroundJobs:
     def __init__(self, settings, *, features=None):
         self.settings = settings
-        features = {'relations','narrative_scout','dreams'} if features is None else features
+        features = {'relations','narrative_revision','dreams'} if features is None else features
         from ..deployment import task_model
         from ..model_runtime import TaskClient
         clients={'selected':TaskClient(settings.database,'relations')} if task_model(settings.database,'relations') else {}
         self.linker = SceneLinker(germany_config(settings),clients=clients) if 'relations' in features else None
         if self.linker:
             self.linker.proposal_store(create=True)
-        self.scout = Scout(settings) if 'narrative_scout' in features else None
+        self.scout = Scout(settings) if {'narrative_revision','narrative_scout'} & features else None
         self.dreams = Dreams(settings) if 'dreams' in features else None
 
     async def run(self):

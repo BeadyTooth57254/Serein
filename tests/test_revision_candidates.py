@@ -176,64 +176,35 @@ def test_candidate_material_titles_pagination_and_current_read_access(settings):
         assert client.get(path, params={'limit':101}).status_code == 422
 
 
-@pytest.mark.parametrize('fail_first', [False, True])
-def test_scan_model_to_inbox_retry_then_explicit_line_creation(settings, monkeypatch, fail_first):
+def test_scan_retires_model_candidates_without_calling_a_model(settings, monkeypatch):
     from fastapi.testclient import TestClient
     from serein.api.http import create_app
-    from serein.compat.events import Events
     from serein.deployment import save_settings
-    from test_live_events import item
 
-    original = '我们看到《星河列车》第三集，讨论照片里的铁轨。'
-    event = item(original, origin='synthetic:arc-scout-chain')
-    event['title'] = '《星河列车》的铁轨'
-    event['source_refs'][0]['content'] = original
-    event_id = Events(settings.database).write_many([event])['items'][0]['item_id']
-    with Store(settings.database) as store:
-        store.create('scene_train', 'scene', '《星河列车》的照片', '我记得我们从照片聊到铁轨。',
-                     metadata={'object_kind': 'scene'})
+    seed(settings, count=2)
     save_settings(settings.database, {'models': [{'id': 'scout', 'model': 'synthetic-scout',
         'base_url': 'http://127.0.0.1:9/v1'}], 'assignments': {'narrative_scout': 'scout'}})
-    calls = []
+    with narrative_transaction(settings.database, write=True) as rolls:
+        RevisionInbox(rolls.store)._save({'items': [
+            {'proposal_id': 'old-model-candidate', 'proposal_kind': 'new_roll_candidate',
+             'status': 'pending', 'source_scene_ids': ['scene_0']},
+            {'proposal_id': 'old-program-hint', 'status': 'pending',
+             'source_type': 'scene', 'source_id': 'scene_1'},
+        ]})
 
-    async def complete(model, payload):
-        calls.append(payload)
-        assert model['model'] == 'synthetic-scout'
-        if fail_first and len(calls) == 1:
-            raise RuntimeError('synthetic provider failure')
-        prompt = payload['messages'][1]['content']
-        corridors = json.loads(prompt.split('<keyword_corridors_json>')[1].split('</keyword_corridors_json>')[0])
-        corridor = next(row for row in corridors if row['seed']['source_type'] == 'event')
-        assert corridor['seed']['source_id'] == event_id
-        assert corridor['seed']['source_excerpt'] == original
-        assert 'scene_train' in [row['source_id'] for row in corridor['one_hop_candidates']]
-        output = {'candidates': [{'seed_source_type': 'event', 'seed_source_id': event_id,
-            'title': '列车与照片', 'reason': '沿着照片追看铁轨线索', 'confidence': 'high',
-            'materials': [{'source_type': 'event', 'source_id': event_id},
-                          {'source_type': 'scene', 'source_id': 'scene_train'}]}]}
-        return {'choices': [{'message': {'content': json.dumps(output, ensure_ascii=False)}}]}
+    async def unexpected(*args, **kwargs):
+        pytest.fail('Revision scan must not call the configured theme model')
+    monkeypatch.setattr('serein.model_runtime.complete', unexpected)
 
-    monkeypatch.setattr('serein.model_runtime.complete', complete)
     with TestClient(create_app(settings, token='synthetic', live=True),
                     headers={'Authorization': 'Bearer synthetic'}) as client:
-        scan = lambda: client.post('/api/narrative-revision-inbox/scan', json={}).json()
-        if fail_first:
-            failed = scan()
-            assert failed['external_scout_status'] == 'error' and not failed['external_input_sha256']
-            assert not client.get('/api/narrative-revision-inbox').json()['items']
-        result = scan()
-        assert result['external_scout_status'] == 'ok' and result['new_roll_hints_created'] == 1
-        assert not result['narrative_writes_performed']
-        assert client.get('/api/narrative-rolls').json()['items'] == []
-        proposals = client.get('/api/narrative-revision-inbox').json()['items']
-        assert len(proposals) == 1 and proposals[0]['source_event_ids'] == [event_id]
-        assert proposals[0]['source_scene_ids'] == ['scene_train']
-        assert scan()['external_scout_status'] == 'unchanged'
-        assert len(calls) == (2 if fail_first else 1)
-        saved = client.patch('/api/narrative-revision-inbox/' + proposals[0]['proposal_id'],
-                             json={'action': 'save_line'})
-        assert saved.status_code == 200, saved.text
-        line = client.get('/api/narrative-rolls', params={'narrative_id': saved.json()['narrative_id']}).json()
-        assert line['body'] == '' and line['publication_status'] == 'collecting'
-        assert line['arc_key'] and line['linked_event_ids'] == [event_id]
-        assert line['linked_scene_ids'] == ['scene_train']
+        result = client.post('/api/narrative-revision-inbox/scan', json={}).json()
+        assert result['status'] == 'ok' and result['model_candidates_retired'] == 1
+        assert result['checked_rolls'] == 0
+        visible = client.get('/api/narrative-revision-inbox').json()['items']
+        assert [item['proposal_id'] for item in visible] == ['old-program-hint']
+    with narrative_transaction(settings.database) as rolls:
+        old = next(item for item in RevisionInbox(rolls.store)._load()['items']
+                   if item['proposal_id'] == 'old-model-candidate')
+        assert old['status'] == 'dismissed'
+        assert old['resolution'] == 'automatic_candidate_retired'

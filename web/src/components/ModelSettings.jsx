@@ -6,7 +6,7 @@ import {AgentGuide} from './AgentGuide.jsx';
 import {RecallThresholdSettings} from './RecallThresholdSettings.jsx';
 
 const tasks = {writer:"Narrative Writer",embedding:"Embedding",reranker:"Reranker",
-  relations:"Scene 关系",dreams:"梦境",narrative_scout:"Narrative Scout",persona:"心绪/防撤退",
+  relations:"Scene 关系",dreams:"梦境",narrative_scout:"叙事卷找材料",persona:"心绪/防撤退",
   track_router:"原话 · 归线",event_curator:"原话 · 切分与转录",event_writer:"原话 · Event 写作",operit_tagging:"打标"};
 
 export function ModelSettings({page,summaryRequest=0,onOpenPipeline,onOpenCatalog,onOpenAssignments,

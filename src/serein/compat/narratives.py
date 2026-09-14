@@ -89,6 +89,22 @@ class RevisionInbox(NarrativeRevisionInbox):
         self.store = store
         self._lock = RLock()
 
+    def list(self, **kwargs):
+        """Keep program-generated Arc hints visible, including older cue matches."""
+        return super().list(exclude_proposal_kind='new_roll_candidate', **kwargs)
+
+    def retire_model_candidates(self):
+        raw = self._load()
+        retired = []
+        for item in raw['items']:
+            if item.get('proposal_kind') == 'new_roll_candidate' and item.get('status') == 'pending':
+                item.update(status='dismissed', resolution='automatic_candidate_retired',
+                            reviewed_at=now(), updated_at=now())
+                retired.append(item['proposal_id'])
+        if retired:
+            self._save(raw)
+        return retired
+
     def consider_new_roll_candidates(self, candidates, *, model):
         # Scout ran outside the write transaction. Recheck current source access
         # and membership before accepting its derived grouping or additions.

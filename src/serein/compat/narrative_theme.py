@@ -84,7 +84,7 @@ async def discover(settings, theme, materialize):
     scout = Scout(settings)
     model = task_model(settings.database, 'narrative_scout')
     if not model:
-        raise ValueError('请先在设置 → 配置中选择 Narrative Scout 选材模型。')
+        raise ValueError('请先在设置 → 配置中选择“叙事卷找材料”模型。')
     async with httpx.AsyncClient(timeout=180, follow_redirects=False) as client:
         expansion = await model_json(client, model,
             '把用户给出的叙事主题转成检索词。只返回 JSON {"terms":[最多8个简短主题词或同义词]}。'

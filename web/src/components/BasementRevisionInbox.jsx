@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
 import { Archive, ArrowClockwise, Check, NotePencil, WarningCircle } from "@phosphor-icons/react";
-import { RevisionMaterials, materialCount } from './RevisionMaterials.jsx';
 
 const statusLabels = {
   pending: "待判断",
@@ -13,13 +12,10 @@ const sourceLabels = {
   scene: "Scene",
   window_shadow: "窗影",
   material_freshness: "材料时间",
-  event_group: "成卷候选",
-  material_group: "成卷候选",
 };
 
 const proposalKindLabels = {
   existing_roll_update: "需要更新",
-  new_roll_candidate: "可能成卷",
 };
 
 async function requestRevisionInbox(status) {
@@ -79,7 +75,7 @@ export function BasementRevisionInbox() {
 
   const review = async (item, action) => {
     const prompts = {
-      dismiss: item.proposal_kind === "new_roll_candidate" ? "本次不采用这条成卷候选？" : "本次不影响这卷：撤回这项提示对应的新增材料绑定，保留原始记忆和已写正文。",
+      dismiss: "本次不影响这卷：撤回这项提示对应的新增材料绑定，保留原始记忆和已写正文。",
       reopen: "把这条来源重新放回待判断？已撤回的材料不会自动重新绑定。",
     };
     if (prompts[action] && !window.confirm(prompts[action])) return;
@@ -98,13 +94,6 @@ export function BasementRevisionInbox() {
       const payload = await response.json();
       if (!response.ok) throw new Error(payload?.message || payload?.error || "没有保存这次判断");
       setEditingId("");
-      if (payload.narrative_id && ["save_line", "write"].includes(action)) {
-        window.sessionStorage.setItem("serein:narrative-open-intent", JSON.stringify({
-          narrativeId: payload.narrative_id, action,
-        }));
-        window.location.hash = "#narrative";
-        return;
-      }
       await load(filter);
     } catch (error) {
       window.alert(error instanceof Error ? error.message : "没有保存这次判断");
@@ -119,7 +108,7 @@ export function BasementRevisionInbox() {
         <div>
           <span className="basement-kicker">来源发生变化之后</span>
           <h2 id="revision-inbox-title">修订箱</h2>
-          <p>凌晨四点只检查与标记：已有卷看材料时间，可能成卷的 Event 交给外部模型判断。</p>
+          <p>凌晨四点用程序检查已有 Arc 的关联材料；晚于上次发布的变化会在这里提醒。新主题请到叙事卷手动找材料。</p>
         </div>
         <div className="basement-live-note">
           <i aria-hidden="true" />
@@ -129,7 +118,7 @@ export function BasementRevisionInbox() {
 
       {scan.last_scan_at && (
         <p className="basement-workbench__scan-note">
-          上次扫描 {scan.last_scan_at} · {scan.external_model || "未调用外部模型"} · 正文写入 0
+          上次扫描 {scan.last_scan_at} · 程序检查 · 正文写入 0
         </p>
       )}
 
@@ -155,7 +144,7 @@ export function BasementRevisionInbox() {
         <div className="basement-empty-state">
           <Archive size={22} weight="light" aria-hidden="true" />
           <span>{filter === "pending" ? "现在没有待判断的修订" : `没有${statusLabels[filter]}记录`}</span>
-          <p>新来源只有确实命中叙事卷的 authored cue 或已审核锚点时，才会来到这里。</p>
+          <p>已有 Arc 的关联材料在上次发布后发生变化，才会来到这里。</p>
         </div>
       )}
 
@@ -164,10 +153,10 @@ export function BasementRevisionInbox() {
           <section className="revision-group" key={narrativeId}>
             <header>
               <div>
-                <span>{groupItems[0]?.proposal_kind === "new_roll_candidate" ? "NEW ROLL CANDIDATE" : "NARRATIVE ROLL"}</span>
+                <span>NARRATIVE ROLL</span>
                 <h3>{groupItems[0]?.narrative_title || narrativeId}</h3>
               </div>
-              <small>{groupItems[0]?.proposal_kind === 'new_roll_candidate' ? `${groupItems.reduce((sum, item) => sum + materialCount(item), 0)} 条材料` : `${groupItems.length} 条来源`}</small>
+              <small>{groupItems.length} 条来源</small>
             </header>
             {groupItems.map((item) => (
               <article className="revision-card" key={item.proposal_id}>
@@ -179,16 +168,11 @@ export function BasementRevisionInbox() {
                 </div>
                 <h4>{item.source_title || item.source_id}</h4>
                 {item.source_excerpt && <blockquote>{item.source_excerpt}</blockquote>}
-                {item.last_added_material_count > 0 && <p className="revision-card__freshness">上次新增 {item.last_added_material_count} 条材料，已继续攒在这条候选里。</p>}
-                {item.accumulation_warning && <p role="status">{item.accumulation_warning}</p>}
                 {item.proposal_kind === "existing_roll_update" && (
                   <p className="revision-card__freshness">
                     卷最后修订：{item.narrative_published_at || "未知"}<br />
                     最新材料：{item.latest_material_at || item.source_date || "未知"}
                   </p>
-                )}
-                {item.proposal_kind === "new_roll_candidate" && (
-                  <RevisionMaterials item={item}/>
                 )}
                 {(item.matched_anchors?.length ?? 0) > 0 && (
                   <div className="revision-anchor-list">
@@ -226,17 +210,11 @@ export function BasementRevisionInbox() {
                   <footer className="review-card-actions">
                     {item.status === "pending" && <>
                       <button type="button" onClick={() => review(item, "dismiss")} disabled={savingId === item.proposal_id}>本次不影响</button>
-                      {item.proposal_kind === "new_roll_candidate" && <>
-                        <button type="button" onClick={() => review(item, "save_line")} disabled={savingId === item.proposal_id}>保存叙事线</button>
-                        <button type="button" className="basement-primary-action" onClick={() => review(item, "write")} disabled={savingId === item.proposal_id}><NotePencil size={15} />书写</button>
-                      </>}
-                      {item.proposal_kind !== "new_roll_candidate" && <>
-                        <button type="button" onClick={() => openEditor(item)}><NotePencil size={15} />写修订草稿</button>
-                        <button type="button" className="basement-primary-action" onClick={() => openNarrativeRewrite(item)}><NotePencil size={15} />重写</button>
-                      </>}
+                      <button type="button" onClick={() => openEditor(item)}><NotePencil size={15} />写修订草稿</button>
+                      <button type="button" className="basement-primary-action" onClick={() => openNarrativeRewrite(item)}><NotePencil size={15} />重写</button>
                     </>}
                     {item.status === "dismissed" && <button type="button" onClick={() => review(item, "reopen")} disabled={savingId === item.proposal_id}>重新打开</button>}
-                    {item.status === "absorbed" && <span>{item.resolution === "saved_line" ? "已保存到叙事卷书架，可继续攒材料或书写。" : `已由叙事卷 revision ${item.absorbed_revision ?? "—"} 吸收`}</span>}
+                    {item.status === "absorbed" && <span>已由叙事卷 revision {item.absorbed_revision ?? "—"} 吸收</span>}
                   </footer>
                 )}
               </article>

@@ -334,7 +334,7 @@ def test_optional_jobs_use_selected_models(deployment,monkeypatch):
     jobs=BackgroundJobs(settings,features={'relations','dreams','narrative_scout'})
     assert isinstance(jobs.linker.providers[0]['client'],TaskClient)
     assert isinstance(jobs.dreams.client,TaskClient)
-    assert jobs.scout.config['narrative_rolls']['new_roll_scout_model']=='synthetic-model'
+    assert jobs.scout._narrative_revision_scan_settings()['enabled'] is True
     assert '{ai_name}' not in jobs.scout.role_rules()
     captured=[]
     async def complete(model,payload,**options):

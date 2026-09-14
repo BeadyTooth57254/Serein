@@ -102,7 +102,7 @@ def test_discovery_requires_explicit_scout_assignment(live, monkeypatch):
         pytest.fail('Unconfigured discovery must not call a model')
     monkeypatch.setattr('serein.compat.narrative_theme.model_json', unexpected)
     response = client.post('/api/narrative-rolls/discover-theme', json={'theme': '一起听雨'})
-    assert response.status_code == 400 and 'Narrative Scout' in response.text
+    assert response.status_code == 400 and '叙事卷找材料' in response.text
 
 
 @pytest.mark.parametrize('protocol', ['openai', 'anthropic'])
