@@ -9,6 +9,39 @@ def manager():
     module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module);return module
 
 
+@pytest.mark.parametrize('installed',[False,True])
+def test_menu_one_updates_existing_instance_and_keeps_first_install(tmp_path,monkeypatch,installed):
+    module=manager();deploy=tmp_path/'deploy';deploy.mkdir();calls=[];menus=[]
+    if installed:(deploy/'config.toml').write_text('synthetic')
+    monkeypatch.setattr(module,'DEPLOY',deploy)
+    monkeypatch.setitem(module.sys.modules,'installer',module)
+    choices=iter(['1','q'])
+    def choose(title,options,**kwargs):
+        menus.append(dict(options));return next(choices)
+    monkeypatch.setattr(module,'choose',choose)
+    monkeypatch.setattr(module,'select_environment',lambda:calls.append('environment'))
+    monkeypatch.setattr(module,'ensure_tools',lambda:calls.append('tools'))
+    monkeypatch.setattr(module,'deploy',lambda:calls.append('install'))
+    monkeypatch.setattr(module,'pause',lambda:None)
+    original=module.importlib.util.spec_from_file_location
+    def spec_for(name,path):
+        spec=original(name,path)
+        if name=='upstream_update':
+            def load(helper):
+                def update(actual):
+                    assert actual is module
+                    calls.append('update');return True
+                helper.run_update=update
+            spec.loader.exec_module=load
+        return spec
+    monkeypatch.setattr(module.importlib.util,'spec_from_file_location',spec_for)
+    module.main()
+    assert calls==(['update'] if installed else ['environment','tools','install'])
+    assert menus[0]['1']==('拉取上游代码并重建' if installed else '安装 Serein（全新安装／旧库迁移）')
+    assert '11' not in menus[0]
+    assert not any('本地源码' in label for label in menus[0].values())
+
+
 @pytest.mark.parametrize('confirmed',[False,True])
 def test_history_repair_menu_previews_before_confirmation_and_stops_only_for_apply(tmp_path,monkeypatch,confirmed):
     module=manager();deploy=tmp_path/'deploy';deploy.mkdir();(deploy/'config.toml').write_text('synthetic')
