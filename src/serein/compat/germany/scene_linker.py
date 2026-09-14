@@ -2157,12 +2157,13 @@ class SceneLinker:
                 continue
             raw_edges = parsed.get("edges") or []
             normalized, rejected = self._normalize_edges(anchor, candidate_map, raw_edges)
-            if raw_edges and (not normalized or rejected):
+            if raw_edges and not normalized:
                 attempts.append(
                     {
                         "model": provider["name"],
                         "status": "evidence_contract_failed",
                         "rejected": len(rejected),
+                        "rejections": rejected,
                     }
                 )
                 continue
@@ -2179,6 +2180,7 @@ class SceneLinker:
                     "status": "accepted_response",
                     "proposals": len(rows),
                     "rejected": len(rejected),
+                    "rejections": rejected,
                 }
             )
             auto_reviews = await self.auto_review([row['proposal_id'] for row in rows], bucket_mgr)
@@ -2622,8 +2624,8 @@ class SceneLinker:
                 rejected.append({"reason": "confidence_below_threshold", "candidate": candidate_id})
                 continue
             reason = re.sub(r"\s+", " ", str(item.get("reason") or "").strip())[:360]
-            if len(reason) < 12:
-                rejected.append({"reason": "reason_too_thin", "candidate": candidate_id})
+            if not reason:
+                rejected.append({"reason": "reason_missing", "candidate": candidate_id})
                 continue
             anchor_ok, anchor_evidence = _evidence_is_verbatim(
                 anchor_content,

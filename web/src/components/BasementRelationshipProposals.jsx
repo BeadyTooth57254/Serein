@@ -88,6 +88,24 @@ export function BasementRelationshipProposals() {
 
   const proposals = state.payload?.proposals ?? [];
   const edges = state.payload?.edges ?? [];
+  const failedJobs = state.payload?.failed_jobs ?? [];
+  const retryJob = async (job) => {
+    setEdgeActionId(job.attempt_id);
+    try {
+      const response = await fetch("/__serein/memory/retry-scene-relation", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ scene_id: job.scene_id, attempt_id: job.attempt_id }),
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload?.detail || payload?.error || payload?.message || "未能重试关联");
+      await load(filter);
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : "未能重试关联");
+    } finally {
+      setEdgeActionId("");
+    }
+  };
   const openScenePreview = async (sceneId, fallback = {}) => {
     if (!sceneId) return;
     setScenePreview({
@@ -255,6 +273,23 @@ export function BasementRelationshipProposals() {
         <p><strong>相似，不等于有关联。</strong>接受前会再验两端 active 状态、内容 hash 与逐字证据；只有通过审核的边，才会出现在记忆卡的“关联 Scene”。</p>
       </aside>
 
+      {failedJobs.length > 0 && (
+        <section className="relationship-manual-form" aria-label="未完成的关联任务">
+          <header><div>
+            <strong>关联未完成 · {failedJobs.length} 条</strong>
+            <p>失败后不会自动重复请求。修正模型配置后可重试一次，会调用模型；再次失败仍会暂停。</p>
+          </div></header>
+          {failedJobs.map((job) => (
+            <div className="review-toolbar" key={job.scene_id}>
+              <span><strong>{job.title || job.scene_id}</strong> · {job.error}</span>
+              <button type="button" disabled={Boolean(edgeActionId)} onClick={() => retryJob(job)}>
+                <ArrowClockwise size={15} aria-hidden="true" />重试一次
+              </button>
+            </div>
+          ))}
+        </section>
+      )}
+
       {composerOpen && (
         <form className="relationship-manual-form" onSubmit={submitManualProposal}>
           <header>
@@ -277,7 +312,7 @@ export function BasementRelationshipProposals() {
                 <option value="evidenced_by">被另一幕印证</option>
               </select>
             </label>
-            <label className="is-wide">为什么成立<input value={draft.reason} onChange={(event) => setDraft((current) => ({ ...current, reason: event.target.value }))} minLength={12} required /></label>
+            <label className="is-wide">为什么成立<input value={draft.reason} onChange={(event) => setDraft((current) => ({ ...current, reason: event.target.value }))} required /></label>
             <label>起点逐字证据<textarea rows={3} value={draft.sourceEvidence} onChange={(event) => setDraft((current) => ({ ...current, sourceEvidence: event.target.value }))} required /></label>
             <label>终点逐字证据<textarea rows={3} value={draft.targetEvidence} onChange={(event) => setDraft((current) => ({ ...current, targetEvidence: event.target.value }))} required /></label>
           </div>

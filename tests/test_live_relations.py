@@ -52,6 +52,19 @@ def test_changed_scene_cannot_promote_old_proposal(live):
     assert client.get('/api/scene-edges').json()['edges']==[]
 
 
+@pytest.mark.parametrize('reason,ok',[('雨声回响',True),(' ',False)])
+def test_manual_relation_requires_reason_without_minimum_length(live,reason,ok):
+    _,client=live
+    source=create(client,'Synthetic A','A synthetic shared moment beside the window.')
+    target=create(client,'Synthetic B','Another synthetic memory beside the window.')
+    result=client.post('/api/scene-edge-proposals/manual',json={
+        'source_scene_id':source,'target_scene_id':target,'relation_type':'echoes',
+        'source_evidence':'A synthetic shared moment beside the window.',
+        'target_evidence':'Another synthetic memory beside the window.',
+        'reason':reason,'confirm':'CREATE_SCENE_EDGE_PROPOSAL'})
+    assert (result.status_code==200)==ok,result.text
+
+
 def test_imported_boundary_whitespace_keeps_reviewed_relation_visible(live):
     settings,client=live
     source,target,proposal=seed(client)

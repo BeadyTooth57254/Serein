@@ -24,8 +24,21 @@ def routes(settings,auth):
 
     @router.get('/api/scene-edge-proposals')
     async def proposals(status: str='pending',proposal_id: str='',anchor_scene_id: str='',limit: int=20,include_context: bool=False):
-        return response(await linker.list_proposals(scenes,status=status,proposal_id=proposal_id,
-            anchor_scene_id=anchor_scene_id,limit=max(1,min(100,limit)),include_context=include_context))
+        from ..compat.jobs import scene_job_failures
+        result = await linker.list_proposals(scenes,status=status,proposal_id=proposal_id,
+            anchor_scene_id=anchor_scene_id,limit=max(1,min(100,limit)),include_context=include_context)
+        return response({**result, 'failed_jobs': scene_job_failures(settings)})
+
+    @router.post('/api/scene-relation-jobs/retry')
+    def retry(body: dict):
+        from ..compat.jobs import retry_scene_job
+        from ..deployment import task_model
+        if not task_model(settings.database, 'relations'):
+            raise HTTPException(409, '请先配置 Scene 关联模型。')
+        if not isinstance(body.get('scene_id'), str) or not isinstance(body.get('attempt_id'), str):
+            raise HTTPException(400, 'Scene 和失败记录编号不能为空。')
+        try:return response(retry_scene_job(settings, body['scene_id'], body['attempt_id']))
+        except RuntimeError as exc:raise HTTPException(409, str(exc)) from exc
 
     @router.post('/api/scene-edge-proposals/manual')
     async def manual(body: dict):

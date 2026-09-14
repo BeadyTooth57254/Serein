@@ -1817,6 +1817,27 @@ function sereinMemoryBridge() {
         }
       });
 
+      server.middlewares.use("/__serein/memory/retry-scene-relation", async (request, response) => {
+        response.setHeader("Content-Type", "application/json; charset=utf-8");
+        if (request.method !== "POST") {
+          response.statusCode = 405;
+          response.end(JSON.stringify({ error: "method_not_allowed" }));
+          return;
+        }
+        try {
+          const body = await readJsonBody(request);
+          const upstream = await callSereinDashboard("/api/scene-relation-jobs/retry", {
+            method: "POST",
+            body: { scene_id: body.scene_id, attempt_id: body.attempt_id },
+          });
+          response.statusCode = upstream.status;
+          response.end(JSON.stringify(upstream.payload));
+        } catch {
+          response.statusCode = 502;
+          response.end(JSON.stringify({ message: "未能提交重试，请刷新查看任务状态。" }));
+        }
+      });
+
       server.middlewares.use("/__serein/memory/review-scene-edge-proposal", async (request, response) => {
         response.setHeader("Content-Type", "application/json; charset=utf-8");
         if (request.method !== "POST") {
