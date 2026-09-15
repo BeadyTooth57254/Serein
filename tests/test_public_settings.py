@@ -30,7 +30,8 @@ def test_passage_settings_are_optional_strict_and_independent(deployment):
     from serein.deployment import save_settings
     settings,client=deployment
     initial=client.get('/v1/settings').json()
-    assert initial['recall']=={'direct_threshold':.65,'passages_enabled':False,'passage_min_chars':500}
+    assert initial['recall']=={'direct_threshold':.65,'body_candidate_threshold':.5,
+                               'cue_candidate_threshold':.55,'passages_enabled':False,'passage_min_chars':500}
     enabled=client.patch('/v1/settings',json={'recall':{'passages_enabled':True,'passage_min_chars':800}})
     assert enabled.status_code==200
     client.patch('/v1/settings',json={'recall':{'direct_threshold':.6}})
@@ -66,6 +67,31 @@ def test_recall_threshold_persists_and_validates_without_repreparing(deployment)
     assert stale.status_code==400
     assert client.get('/v1/settings').json()['recall']['direct_threshold']==.6
     assert client.patch('/v1/settings',json={'recall':{'direct_threshold':.65}}).status_code==200
+
+
+def test_candidate_thresholds_default_persist_and_survive_old_client_updates(deployment):
+    from serein.configured_models import effective_settings
+    from serein.deployment import save_settings
+    settings,client=deployment
+    save_settings(settings.database,{'recall':{'direct_threshold':.62}})
+    initial=client.get('/v1/settings').json()
+    assert initial['recall']['direct_threshold']==.62
+    assert initial['recall']['body_candidate_threshold']==.5
+    assert initial['recall']['cue_candidate_threshold']==.55
+    assert read_settings(settings.database)['recall']=={'direct_threshold':.62}
+    saved=client.patch('/v1/settings',json={'recall':{
+        'body_candidate_threshold':.47,'cue_candidate_threshold':.59}})
+    assert saved.status_code==200,saved.text
+    assert saved.json()['recall']['direct_threshold']==.62
+    client.patch('/v1/settings',json={'recall':{'direct_threshold':.61}}).raise_for_status()
+    current=client.get('/v1/settings').json()['recall']
+    assert current=={'direct_threshold':.61,'body_candidate_threshold':.47,
+                     'cue_candidate_threshold':.59,'passages_enabled':False,'passage_min_chars':500}
+    assert effective_settings(settings).recall['body_candidate_threshold']==.47
+    assert not (settings.database.parent/'model-indexes').exists()
+    for field in ('body_candidate_threshold','cue_candidate_threshold'):
+        for value in (-.1,1.1,True,'0.6',None):
+            assert client.patch('/v1/settings',json={'recall':{field:value}}).status_code==422
 
 
 def test_unset_recall_threshold_preserves_toml(deployment):

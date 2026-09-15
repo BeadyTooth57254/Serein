@@ -57,6 +57,19 @@ def test_weak_cue_top_k_is_not_an_entry_signal():
     assert counts['cue_expansion']==0
 
 
+def test_saved_candidate_thresholds_change_only_tail_eligibility():
+    ranked=[candidate('scene',f's{i}',.40-i*.01) for i in range(6)]
+    ranked += [candidate('event','body-tail',.48),candidate('scene','cue-tail',.30)]
+    channels=found(cues=[{'owner_id':'cue-tail','score':.56,'matched_cues':['语义改写线索']}])
+    strict,_=typed_surface.select_candidate_pool(None,channels,ranked,[],SimpleNamespace(text='手机维修'),
+        body_threshold=.50,cue_threshold=.57)
+    relaxed,_=typed_surface.select_candidate_pool(None,channels,ranked,[],SimpleNamespace(text='手机维修'),
+        body_threshold=.47,cue_threshold=.55)
+    assert {row['owner_id'] for row in strict}=={f's{i}' for i in range(6)}
+    assert {row['owner_id'] for row in relaxed}.issuperset({'body-tail','cue-tail'})
+    assert all(row['entry_reasons']==['base_vector_rank'] for row in strict)
+
+
 def test_entity_name_requires_recall_intent():
     ranked=[candidate('scene',f's{i}',.9-i*.02) for i in range(6)]
     ranked.append(candidate('scene','entity',.40))

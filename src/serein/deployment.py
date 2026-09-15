@@ -137,9 +137,10 @@ def save_settings(database, changes):
                 current[section].update(values)
         if current['features']['narrative_tools']:
             current['upstream']['writer_enabled'] = False
-        threshold = current['recall'].get('direct_threshold')
-        if 'direct_threshold' in current['recall'] and (type(threshold) not in (int, float) or not math.isfinite(threshold) or not 0 <= threshold <= 1):
-            raise ValueError('Recall threshold must be a finite number between 0 and 1')
+        for key in ('direct_threshold','body_candidate_threshold','cue_candidate_threshold'):
+            threshold = current['recall'].get(key)
+            if key in current['recall'] and (type(threshold) not in (int, float) or not math.isfinite(threshold) or not 0 <= threshold <= 1):
+                raise ValueError('Recall threshold must be a finite number between 0 and 1')
         from .recall.policy import RecallPolicy
         RecallPolicy.from_config(current['recall'])
         current['assignments'].pop('anti_retreat',None)

@@ -30,6 +30,7 @@ export function SettingsPanel({
 }) {
   const [tab, setTab] = useState("appearance");
   const [recallThreshold,setRecallThreshold]=useState(null);
+  const [candidateThresholdDraft,setCandidateThresholdDraft]=useState({});
   const [passageDraft,setPassageDraft]=useState({});
   const pages = useRef(null);
   const snapTimer = useRef(null);
@@ -229,6 +230,7 @@ export function SettingsPanel({
             {open && <FeatureSettings onOpenSummary={openSummary} onOpenEventGuide={onOpenEventGuide} />}
           </div>
           {open && <ModelSettings page={tab} summaryRequest={summaryRequest} recallThreshold={recallThreshold} setRecallThreshold={setRecallThreshold}
+            candidateThresholdDraft={candidateThresholdDraft} setCandidateThresholdDraft={setCandidateThresholdDraft}
             passageDraft={passageDraft} setPassageDraft={setPassageDraft} onOpenPipeline={()=>showTab("imports")} onOpenCatalog={()=>showTab("models")} onOpenAssignments={()=>showTab("configuration")} />}
           <div role="tabpanel" id="settings-content-imports" aria-labelledby="settings-tab-imports" aria-hidden={tab !== "imports"} inert={tab !== "imports"}>
             {open && <PipelineSettings onOpenSummary={openSummary} />}

@@ -331,10 +331,11 @@ def _entity_matches(index, query, owner_keys):
     return output
 
 
-def select_candidate_pool(snapshot, found, ranked, entity_matches, query, *, limit=20):
+def select_candidate_pool(snapshot, found, ranked, entity_matches, query, *, limit=20,
+                          body_threshold=.50, cue_threshold=.55):
     """Keep six mixed vectors, then require cheap evidence for bounded expansion."""
     cue_by_owner={str(row.get('owner_id') or ''):row for row in _channel_rows(found,'scene','cue_search')
-                  if float(row.get('score') or 0)>=.55}
+                  if float(row.get('score') or 0)>=cue_threshold}
     lexical_by_owner={str(row.get('owner_id') or ''):row for row in _channel_rows(found,'event','lexical_search')
                       if row.get('specific_terms')}
     entities={}
@@ -372,7 +373,7 @@ def select_candidate_pool(snapshot, found, ranked, entity_matches, query, *, lim
             chosen.append(prepare(row,'base_vector_rank'));seen.add(key);counts['base_pool']+=1
             continue
         components=row.get('score_components') or {}
-        strong=max((float(value) for value in components.values()),default=-2)>=.50
+        strong=max((float(value) for value in components.values()),default=-2)>=body_threshold
         cue=key[0]=='scene' and key[1] in cue_by_owner
         lexical=key[0]=='event' and key[1] in lexical_by_owner
         entity=recall_intent and bool(entities.get(key))
@@ -462,7 +463,9 @@ def run(engine, query, result, gate, decision, embedding, *, cutoff, limit, use_
             ranked=mixed_candidates(snapshot,found,upstream._passage_candidate_shadow_arc_members,query) if strategy=='mixed' else found.get('candidates',[])
             all_entity_matches=_entity_matches(entity_index,query.text,
                 {(row['owner_kind'],row['owner_id']) for row in ranked})
-            rows,entry_counts=select_candidate_pool(snapshot,found,ranked,all_entity_matches,query) if strategy=='mixed' else (ranked,Counter())
+            rows,entry_counts=select_candidate_pool(snapshot,found,ranked,all_entity_matches,query,
+                body_threshold=engine.policy.body_candidate_threshold,
+                cue_threshold=engine.policy.cue_candidate_threshold) if strategy=='mixed' else (ranked,Counter())
         scope=found.get('entity_scope',{})
         result['candidate_policy']={**found.get('policy',{}),'selection_strategy':strategy}
         if strategy=='mixed':
@@ -470,7 +473,8 @@ def run(engine, query, result, gate, decision, embedding, *, cutoff, limit, use_
                 freshness_rerank='bounded_across_mixed_pool',pool_limit=21 if association_enabled else 20,
                 direct_pool_limit=20,base_vector_pool_limit=6,relation_pool_limit=int(association_enabled),
                 association_enabled=association_enabled,final_order='reranker_descending',vector_floor=None if cutoff == -1 else cutoff,
-                tail_body_or_passage_floor=.50,cue_semantic_floor=.55,
+                tail_body_or_passage_floor=engine.policy.body_candidate_threshold,
+                cue_semantic_floor=engine.policy.cue_candidate_threshold,
                 expansion_limits={'cue':3,'keyword':3,'entity':3},cue_contributes_score=False,
                 keyword_contributes_score=False,entity_contributes_score=False)
         result['candidate_retrieval']={k:found[k] for k in ('status','reason','candidate_count','entity_scope') if k in found}

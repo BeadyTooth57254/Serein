@@ -10,12 +10,17 @@ const tasks = {writer:"Narrative Writer",embedding:"Embedding",reranker:"Reranke
   track_router:"原话 · 归线",event_curator:"原话 · 切分与转录",event_writer:"原话 · Event 写作",operit_tagging:"打标"};
 
 export function ModelSettings({page,summaryRequest=0,onOpenPipeline,onOpenCatalog,onOpenAssignments,
-  recallThreshold,setRecallThreshold,passageDraft,setPassageDraft}) {
+  recallThreshold,setRecallThreshold,candidateThresholdDraft,setCandidateThresholdDraft,
+  passageDraft,setPassageDraft}) {
   const [config,setConfig]=useState(null);
   const passagesEnabled=passageDraft.passages_enabled ?? config?.recall?.passages_enabled ?? false;
   const passageMinChars=passageDraft.passage_min_chars ?? config?.recall?.passage_min_chars ?? 500;
   const threshold=recallThreshold ?? config?.recall?.direct_threshold ?? 0.65;
+  const bodyCandidateThreshold=candidateThresholdDraft.body_candidate_threshold ?? config?.recall?.body_candidate_threshold ?? 0.50;
+  const cueCandidateThreshold=candidateThresholdDraft.cue_candidate_threshold ?? config?.recall?.cue_candidate_threshold ?? 0.55;
   const validThreshold=threshold!=='' && Number.isFinite(Number(threshold)) && Number(threshold)>=0 && Number(threshold)<=1;
+  const validCandidateThresholds=[bodyCandidateThreshold,cueCandidateThreshold].every(value=>
+    value!=='' && Number.isFinite(Number(value)) && Number(value)>=0 && Number(value)<=1);
   const summaryConfig=useRef(null);
   const ready=!!config;
   useEffect(()=>{
@@ -55,13 +60,15 @@ export function ModelSettings({page,summaryRequest=0,onOpenPipeline,onOpenCatalo
         return upstream;
       });
       if(!validThreshold)throw new Error('召回阈值需填写 0 到 1 之间的数字。');
+      if(!validCandidateThresholds)throw new Error('候选扩展门槛需填写 0 到 1 之间的数字。');
       if(passageMinChars===''||!Number.isInteger(Number(passageMinChars))||Number(passageMinChars)<1||Number(passageMinChars)>100000)
         throw new Error('长文起切字数需填写 1 到 100000 之间的整数。');
       const result=await instanceSettings({expected_version:config.settings_version,models,upstreams,assignments:config.assignments,pipeline:Object.fromEntries(Object.entries(config.pipeline).filter(([key])=>key!=='auto_enabled')),dream:config.dream,
         recall:{...passageDraft,...('passage_min_chars' in passageDraft?{passage_min_chars:Number(passageMinChars)}:{}),
-          ...(recallThreshold!==null?{direct_threshold:Number(threshold)}:{})},upstream:{
+          ...(recallThreshold!==null?{direct_threshold:Number(threshold)}:{}),
+          ...Object.fromEntries(Object.entries(candidateThresholdDraft).map(([key,value])=>[key,Number(value)]))},upstream:{
         writer_enabled:config.upstream.writer_enabled,memory_enabled:config.upstream.memory_enabled,operit_enabled:config.upstream.operit_enabled}});
-      setConfig(result);setRecallThreshold(null);setPassageDraft({});setStatus("设置已保存。");
+      setConfig(result);setRecallThreshold(null);setCandidateThresholdDraft({});setPassageDraft({});setStatus("设置已保存。");
     } catch(error){setStatus(error.message);}
     finally{setBusy(false);}
   }
@@ -118,7 +125,8 @@ export function ModelSettings({page,summaryRequest=0,onOpenPipeline,onOpenCatalo
         <input type="number" min="1" max="100000" step="1" disabled={busy} value={passageMinChars}
           onChange={event=>setPassageDraft(current=>({...current,passage_min_chars:event.target.value}))}/></label>
       <small>有效正文超过此字数才分段，汉字、字母和标点均按字符计。保存后应用于新写入或正文修改的记忆；已有分段保留，不自动全库重切。开启后可点“建立 / 补齐检索索引”一次性补齐旧记忆缺失的分段。</small>
-      <RecallThresholdSettings config={config} draft={recallThreshold} setDraft={setRecallThreshold} disabled={busy}
+      <RecallThresholdSettings config={config} draft={recallThreshold} setDraft={setRecallThreshold}
+        candidateDraft={candidateThresholdDraft} setCandidateDraft={setCandidateThresholdDraft} disabled={busy}
         onSaved={result=>setConfig(current=>({...current,settings_version:result.settings_version,recall:result.recall}))}/>
       <label className="settings-toggle"><span><strong>整理 Operit 注入上下文</strong><small>识别系统前缀、附件和工作区，保留工具续轮的稳定上下文。</small></span><input type="checkbox" role="switch" checked={config.upstream.operit_enabled} onChange={event=>option("operit_enabled",event.target.checked)} /></label>
     <details className="settings-disclosure" ref={summaryConfig}><summary>自动摘要配置</summary><p>有时间按 20 分钟沉默切块；无时间按 20 轮完整问答切块。每块再受字符量限制，保留完整问答和原始编号。时间切块只控制输入，不直接决定 Event 边界。</p>

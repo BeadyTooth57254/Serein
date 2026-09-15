@@ -1,38 +1,53 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="600" height="740" viewBox="0 0 600 740" role="img" aria-labelledby="title desc">
-  <title id="title">一轮聊天的自动召回</title>
-  <desc id="desc">从当前用户消息出发，判断检索需要与范围，查找 Scene 和 Event 候选，再由重排模型比较相关性，检查当前可读状态和冷却，最后交付记忆卡片及按需读取的 Arc 目录。没有可靠结果时不加记忆，继续聊天。</desc>
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="940" viewBox="0 0 720 940" role="img" aria-labelledby="title desc">
+  <title id="title">一轮聊天的自动召回边界</title>
+  <desc id="desc">当前用户消息先经过路由和范围判断，再批量过滤不可自动浮现的对象。前六条混合向量候选作为宽探针，第七到第二十条需要正文、片段、cue、关键词或实体证据。候选经重排门槛准入后最多选择两条，再检查状态、版本与冷却。Serein 网关直接放入模型上下文；Hook 只返回待带入内容，由宿主实际注入并在成功后登记交付。</desc>
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M1 1 8 5 1 9" fill="none" stroke="#72918a" stroke-width="1.5"/></marker>
   </defs>
-  <rect width="600" height="740" rx="20" fill="#f8faf9"/>
+  <rect width="720" height="940" rx="20" fill="#f8faf9"/>
   <g font-family="'Noto Sans CJK SC','Microsoft YaHei','PingFang SC',sans-serif" text-anchor="middle">
     <g fill="#fff" stroke="#c5d7cf">
-      <rect x="38" y="28" width="524" height="104" rx="14"/>
-      <rect x="38" y="158" width="524" height="104" rx="14"/>
-      <rect x="38" y="288" width="524" height="104" rx="14"/>
-      <rect x="38" y="418" width="524" height="104" rx="14"/>
-      <rect x="38" y="548" width="524" height="104" rx="14" fill="#edf4f1"/>
+      <rect x="54" y="28" width="612" height="94" rx="14"/>
+      <rect x="54" y="148" width="612" height="126" rx="14"/>
+      <rect x="54" y="300" width="612" height="112" rx="14"/>
+      <rect x="54" y="438" width="612" height="112" rx="14"/>
+      <rect x="54" y="576" width="612" height="112" rx="14"/>
+      <rect x="54" y="742" width="284" height="118" rx="14" fill="#edf4f1"/>
+      <rect x="382" y="742" width="284" height="118" rx="14" fill="#edf4f1"/>
     </g>
     <g fill="none" stroke="#72918a" stroke-width="2" marker-end="url(#arrow)">
-      <path d="M300 133 V150"/>
-      <path d="M300 263 V280"/>
-      <path d="M300 393 V410"/>
-      <path d="M300 523 V540"/>
+      <path d="M360 123 V140"/>
+      <path d="M360 275 V292"/>
+      <path d="M360 413 V430"/>
+      <path d="M360 551 V568"/>
+      <path d="M360 689 V714 H196 V734"/>
+      <path d="M360 714 H524 V734"/>
     </g>
-    <g font-size="25" fill="#243f39">
-      <text x="300" y="72">当前用户消息</text>
-      <text x="300" y="202">寻找 Scene 与 Event 候选</text>
-      <text x="300" y="332">比较与当前问题的相关性</text>
-      <text x="300" y="462">确认本轮能否带入</text>
-      <text x="300" y="592">交给聊天模型</text>
+    <g font-size="24" fill="#243f39">
+      <text x="360" y="68">当前用户消息</text>
+      <text x="360" y="188">Candidate · 形成有界候选</text>
+      <text x="360" y="340">Admission · 重排准入</text>
+      <text x="360" y="478">Selection · 选卡</text>
+      <text x="360" y="616">Cooldown · 交付前复查</text>
+      <text x="196" y="782">Serein 网关</text>
+      <text x="524" y="782">Hook 接入</text>
     </g>
-    <g font-size="20" fill="#52645d">
-      <text x="300" y="109">判断是否检索，利用实体与 Arc 确定范围</text>
-      <text x="300" y="239">整条正文 / 长文片段 / 可选关联候选</text>
-      <text x="300" y="369">重排模型筛选，向量接近不等于选中</text>
-      <text x="300" y="499">复查状态、版本和冷却，默认最多两条</text>
-      <text x="300" y="629">记忆卡片 + 按需读取的 Arc 材料目录</text>
+    <g font-size="17" fill="#52645d">
+      <text x="360" y="98">判断是否召回，并用实体、主题或 Arc 限定范围</text>
+      <text x="360" y="216">批量排除非活动、手动关闭、已替换及被 Scene 完整覆盖的 Event</text>
+      <text x="360" y="240">前 6 条向量宽探针；第 7–20 条须有正文／片段、cue 语义、</text>
+      <text x="360" y="264">Event 特定关键词或回忆实体证据，不为凑数补弱结果</text>
+      <text x="360" y="372">cue、关键词与实体只给资格，不加分；已审核 Scene 关系候选最多 +1</text>
+      <text x="360" y="396">所有直接候选仍须达到最终 reranker 门槛</text>
+      <text x="360" y="510">按重排结果最多选择两张记忆卡</text>
+      <text x="360" y="534">未通过的不进入；关系候选不预留名额</text>
+      <text x="360" y="648">复查当前状态与版本，再应用已交付冷却</text>
+      <text x="360" y="672">冷却淘汰赢家后，不用较弱候选补位</text>
+      <text x="196" y="814">直接加入本轮模型上下文</text>
+      <text x="196" y="840">此时才算实际注入</text>
+      <text x="524" y="814">先返回 additional_context</text>
+      <text x="524" y="840">宿主实际注入并在成功后登记</text>
     </g>
-    <text x="300" y="706" font-size="22" fill="#60716b">没有可靠结果：不加记忆，继续聊天</text>
+    <text x="360" y="906" font-size="20" fill="#60716b">候选 ≠ 准入 ≠ 选卡 ≠ 实际注入</text>
   </g>
 </svg>

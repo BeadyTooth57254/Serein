@@ -66,6 +66,20 @@ def test_rejected_top_six_do_not_promote_seventh_memory(legacy):
     assert result['selected_refs']==[]
 
 
+def test_configured_body_candidate_threshold_applies_on_next_recall(legacy):
+    from dataclasses import replace
+    _,build=legacy
+    engine,calls=build([(f's{i}','scene',.90-i*.02,'2026-09-01') for i in range(6)]+
+                       [('tail','event',.48,'2026-09-01')])
+    engine.run('手机维修',method='semantic',min_cosine=.5)
+    assert 'event:tail' not in {row['ref'] for row in calls}
+    calls.clear()
+    engine.policy=replace(engine.policy,body_candidate_threshold=.47)
+    result=engine.run('手机维修',method='semantic',min_cosine=.5)
+    assert 'event:tail' in {row['ref'] for row in calls}
+    assert result['candidate_policy']['tail_body_or_passage_floor']==.47
+
+
 @pytest.mark.parametrize('cooled,expected',[(['scene:s0'],['scene:s1']),(['scene:s0','scene:s1'],[])])
 def test_old_winners_are_cooled_without_refilling(legacy,cooled,expected):
     _,build=legacy
