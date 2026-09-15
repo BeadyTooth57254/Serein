@@ -5,6 +5,13 @@ import {callSereinBackend} from '../server/sereinBackend.mjs';
 import {buildNarrativeTaskPrompt,runNarrativeCodexTask} from '../server/narrativeCodexRunner.mjs';
 import {buildSceneEvidenceRefs} from '../server/sceneEvidenceBridge.mjs';
 import {resolveGatewayObservationOutcome,gatewayRequestLabel,resolveBridgeObservationOutcome} from '../src/recallObservationOutcome.js';
+import {readFileSync} from 'node:fs';
+
+test('darkroom lock copy follows the configured AI name',()=>{
+  const source=readFileSync(new URL('../src/data/diary.js',import.meta.url),'utf8');
+  assert.match(source,/lockedTitle[\s\S]*identityName\("assistant"\)[\s\S]*锁了门/);
+  assert.doesNotMatch(source,/Haven/);
+});
 
 test('observation distinguishes disabled recall, preparation, failure and successful injection',()=>{
   const prepared={observation_version:1,prepared_ids:['scene:a'],injected_bucket_ids:[],request_status:'upstream_pending'};
