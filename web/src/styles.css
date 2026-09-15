@@ -363,7 +363,6 @@ label:has(input:focus-visible) {
   display: block;
   border-radius: inherit;
   object-fit: cover;
-  filter: grayscale(1) contrast(0.96);
 }
 .avatar__edit {
   position: absolute;
