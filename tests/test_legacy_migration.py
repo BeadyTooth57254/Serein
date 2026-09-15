@@ -10,7 +10,7 @@ from serein.bootstrap import initialize
 from serein.config import Settings
 from serein.core.store import Store, digest
 from serein.deployment import read_settings, save_settings
-from serein.legacy_migration.scan import clean_body, is_old_self_anchor, scan, unpack
+from serein.legacy_migration.scan import clean_body, is_daily_impression, is_old_self_anchor, scan, unpack
 from serein.legacy_migration.models import import_models
 from serein.legacy_migration.workflow import Migration, validate_cues
 from serein.legacy_migration.vectors import reuse_legacy, maintain
@@ -77,6 +77,26 @@ def test_self_anchor_markers_do_not_match_normal_prose():
                      {'domain':['self_anchor']},{'anchor_kind':'first-person-anchor'}):
         assert is_old_self_anchor(metadata)
     assert not is_old_self_anchor({'tags':['关于自我的一次谈话'],'domain':['relationship']})
+
+
+def test_daily_impressions_are_discarded_but_ordinary_feel_is_a_diary(setup):
+    _,root,_,_=setup
+    legacy(root,'feel','reflection_daily_2026-09-14','应当丢弃。')
+    tagged=legacy(root,'feel','weather','也应当丢弃。')
+    tagged.write_text(tagged.read_text('utf-8').replace('tags: [old]','tags: [relationship_weather]'),'utf-8')
+    weekly=legacy(root,'feel','weekly','周印象也属于退役关系天气。')
+    weekly.write_text(weekly.read_text('utf-8').replace('tags: [old]','tags: [weekly_impression]'),'utf-8')
+    mentioned=legacy(root,'feel','ordinary-mention','普通心绪正文提到日印象，但不是日印象记录。')
+    plan=scan(root)
+    ids={item['old_id'] for item in plan['items']}
+    assert {'reflection_daily_2026-09-14','weather','weekly'}.isdisjoint(ids)
+    assert {'diary','ordinary-mention'} <= ids
+    assert plan['summary']['daily_impressions_discarded']==3
+    assert {row['old_id'] for row in plan['skipped'] if row['reason']=='daily_impression_discarded'}=={
+        'reflection_daily_2026-09-14','weather','weekly'}
+    assert is_daily_impression({'id':'reflection_daily_2026-09-15','tags':[]})
+    assert is_daily_impression({'id':'other','tags':'daily_impression, old'})
+    assert not is_daily_impression({'id':'other','tags':['old'],'name':'日印象讨论'})
 
 
 def test_changed_source_is_not_silently_imported_as_another_batch(setup):

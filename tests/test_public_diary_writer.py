@@ -72,14 +72,36 @@ def test_public_mcp_diary_create_retry_edit_comment_delete(tmp_path, canonical):
         assert call('delete_diary', delete)['revision'] == 3
         with Reader(settings.database) as reader:
             assert reader.read(f'diary:{key}')['readable'] is False
+        replacement = call('write_diary', {**draft, 'operation_id':'replacement', 'body_md':'同日重新写下'})
+        assert replacement['id'] != str(key)
         call('comment_diary', {**comment, 'operation_id':'deleted-comment'}, error=True)
     with Store(settings.database, read_only=True) as store:
-        assert store.conn.execute('SELECT count(*) FROM diary_entries').fetchone()[0] == 1
-        assert store.conn.execute('SELECT count(*) FROM write_receipts').fetchone()[0] == 4
+        assert store.conn.execute('SELECT count(*) FROM diary_entries').fetchone()[0] == 2
+        assert store.conn.execute("SELECT count(*) FROM diary_entries WHERE visibility='deleted'").fetchone()[0] == 1
+        assert store.conn.execute("SELECT count(*) FROM diary_entries WHERE visibility='active'").fetchone()[0] == 1
+        assert store.conn.execute('SELECT count(*) FROM write_receipts').fetchone()[0] == 5
         if canonical:
             assert store.conn.execute('SELECT revision FROM diaries WHERE id=?', (key,)).fetchone()[0] == 3
             assert store.conn.execute('SELECT count(*) FROM diary_revisions').fetchone()[0] == 2
             assert store.conn.execute('SELECT count(*) FROM diary_projection_pending').fetchone()[0] == 0
+
+
+def test_missing_canonical_diary_projection_does_not_block_later_writes(tmp_path):
+    settings = settings_for(tmp_path)
+    old=Diaries(settings.database).create(content='旧正文',date='2026-09-14',title='旧页',author='ai')
+    Diaries(settings.database).comment(old['id'],content='旧留言',author='user')
+    with Store(settings.database) as store,store.transaction(immediate=True):
+        store.conn.execute('DELETE FROM diaries WHERE id=?',(old['id'],))
+    with Store(settings.database,read_only=True) as store:
+        assert [row[0] for row in store.conn.execute('SELECT id FROM diary_projection_pending')]==[old['id']]
+        assert store.conn.execute('SELECT 1 FROM diary_entries WHERE id=?',(old['id'],)).fetchone()
+    draft={'kind':'diary','author':'ai','day':'2026-09-14','body_md':'新正文','title':'新页'}
+    created=Services(settings).write('after-missing','diary_save',draft)
+    with Store(settings.database,read_only=True) as store:
+        assert store.conn.execute('SELECT count(*) FROM diary_projection_pending').fetchone()[0]==0
+        assert store.conn.execute('SELECT 1 FROM diary_entries WHERE id=?',(old['id'],)).fetchone() is None
+        assert store.conn.execute('SELECT 1 FROM diary_comments WHERE entry_id=?',(old['id'],)).fetchone() is None
+        assert store.conn.execute('SELECT 1 FROM diary_entries WHERE id=?',(created['id'],)).fetchone()
 
 
 def test_projection_failure_rolls_back_canonical_diary_and_receipt(tmp_path, monkeypatch):

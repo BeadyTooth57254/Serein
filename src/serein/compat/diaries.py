@@ -99,7 +99,13 @@ def project_diaries(conn):
     for key, in conn.execute('SELECT id FROM diary_projection_pending').fetchall():
         row=conn.execute('SELECT * FROM diaries WHERE id=?',(key,)).fetchone()
         if row is None:
-            raise ValueError('Diary deletion must preserve its tombstone')
+            # The canonical row may have been removed by an older migration or
+            # an explicit hard-delete.  A stale derived row must not keep every
+            # later Diary write from committing.
+            conn.execute('DELETE FROM diary_entries WHERE id=?',(key,))
+            conn.execute('DELETE FROM diary_comments WHERE entry_id=?',(key,))
+            conn.execute('DELETE FROM diary_sessions WHERE entry_id=?',(key,))
+            continue
         row=dict(row)
         values=(row['id'],row['entry_type'],row['revision'],row['author'],row['date'],row['title'],
                 row['content'],row['visibility'],row['unlock_at'],row['deleted_at'],row['created_at'],

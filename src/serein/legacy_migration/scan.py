@@ -10,6 +10,7 @@ from .comments import capture_comments, comment_summary
 
 BUCKETS={'dynamic','permanent','archive','archived','feel','whisper'}
 AFFECT={'reflection','affect_anchor','和弦情绪','情绪和弦','情绪锚点','和弦'}
+DAILY_IMPRESSION_TAGS={'relationship_weather','daily_impression','weekly_impression'}
 
 
 def is_old_self_anchor(meta):
@@ -25,6 +26,19 @@ def is_old_self_anchor(meta):
         return any(str(part).strip().lower() in markers for part in values)
     return meta.get('self_anchor') is True or any(marked(meta.get(key)) for key in
         ('tags','bucket_tags','domain','profile_kind','bucket_profile_kind','anchor_kind','kind','type','source'))
+
+
+def is_daily_impression(meta):
+    """Recognize retired relationship-weather records without scanning prose."""
+    old_id=str(meta.get('id') or '').strip().lower()
+    if old_id.startswith('reflection_daily_'):
+        return True
+    tags=meta.get('tags')
+    if isinstance(tags,str):
+        tags=tags.split(',')
+    elif not isinstance(tags,(list,tuple,set)):
+        tags=[]
+    return bool({str(tag).strip().lower() for tag in tags} & DAILY_IMPRESSION_TAGS)
 
 
 def clean_body(text):
@@ -110,6 +124,10 @@ def scan(path):
                     skipped.append({'path':relative,'old_id':old_id,'reason':'self_anchor_discarded',
                         'source_hash':hashlib.sha256(raw.encode()).hexdigest()})
                     continue
+                if is_daily_impression(meta):
+                    skipped.append({'path':relative,'old_id':old_id,'reason':'daily_impression_discarded',
+                        'source_hash':hashlib.sha256(raw.encode()).hexdigest()})
+                    continue
                 if old_id in seen:raise ValueError('重复 id，需要先确认保留哪一份')
                 seen.add(old_id)
                 body,removed=clean_body(raw[match.end():])
@@ -160,6 +178,7 @@ def scan(path):
         'errors':len(errors),'empty_after_cleanup_skipped':len(skipped),
         'affect_sections_removed':sum(i['removed_affect_sections'] for i in items),
         'self_anchors_discarded':sum(i['reason']=='self_anchor_discarded' for i in skipped),
+        'daily_impressions_discarded':sum(i['reason']=='daily_impression_discarded' for i in skipped),
         'whole_vector_file_present':(buckets/'embeddings.db').is_file(),
         'whole_vectors_without_input_proof':'旧 embeddings 表通常没有原文/哈希，无法验证的向量会重新生成',
         'daily_impressions':'不导入日印象；不扫描 state 内删除备份和迁移预览', 'companion':companion['summary'], 'history':history['summary'],'originals':originals['summary'],'memory_comments':comment_summary(items)}}
