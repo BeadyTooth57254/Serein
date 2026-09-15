@@ -1,27 +1,14 @@
 import { identityName } from "../storage/instanceStore.js";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ArrowLeft, CaretDown, Check, Crosshair, LinkSimple, MagnifyingGlass, Plus, Quotes, X } from "@phosphor-icons/react";
+import { formatSourceTime } from "../utils/sourceTime.js";
 
 function evidenceKey(item) {
   return `${item?.source_system || ""}:${item?.session_id || ""}:${item?.message_id || ""}`;
 }
 
 function formatEvidenceTime(value) {
-  if (!value) return "时间未记录";
-  const raw = String(value).trim();
-  const hasZone = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(raw);
-  const normalized = !hasZone && /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}/.test(raw)
-    ? `${raw.replace(" ", "T")}Z`
-    : raw;
-  const parsed = new Date(normalized);
-  if (Number.isNaN(parsed.getTime())) return value;
-  return new Intl.DateTimeFormat("zh-CN", {
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).format(parsed);
+  return formatSourceTime(value);
 }
 
 export function SceneEvidenceEditor({ sceneId, sceneTitle }) {

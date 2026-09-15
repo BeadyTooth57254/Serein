@@ -36,6 +36,7 @@ import { SceneCueEditor } from "../components/SceneCueEditor.jsx";
 import { SceneEvidenceEditor } from "../components/SceneEvidenceEditor.jsx";
 import { compareFactEventsByEnd, factEventTimeLabel } from "../utils/factEventTime.js";
 import { applyEventBatch, runEventBatch } from "../utils/eventBatch.js";
+import { formatSourceTime } from "../utils/sourceTime.js";
 
 const relationLabels = {
   continues: {
@@ -173,17 +174,7 @@ function sceneExcerpt(body) {
 }
 
 function sourceTimeLabel(value) {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return String(value || "").replace("T", " ").slice(0, 16);
-  return new Intl.DateTimeFormat("zh-CN", {
-    timeZone: "Asia/Shanghai",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).format(date).replaceAll("/", "-");
+  return formatSourceTime(value, { includeYear: true });
 }
 
 function FactEventDetail({ item, onClose, onRevised, onStatusChanged, onDeleted, onFavoriteChanged }) {
