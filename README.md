@@ -4,7 +4,7 @@
 
 Serein 是一个可自行部署、面向个人使用的 AI 记忆服务。它提供网页、聊天 API 网关和 MCP 工具，让不同聊天窗口读写同一份记忆。公开版从空库开始，不附带私人记忆或模型密钥。
 
-[功能](#功能) · [记忆怎么存](#记忆怎么存) · [Scene 与 Event](#scene-与-event) · [怎么召回](#怎么召回) · [Hook 接入](#hook-接入已有聊天宿主) · [召回格式](#召回的是什么格式) · [Arc／叙事卷](#arc与叙事卷) · [自动摘要](#自动摘要) · [论文](#设计与论文) · [雨夜花园](#雨夜花园) · [安装](#一键脚本与开始使用)
+[功能](#功能) · [记忆怎么存](#记忆怎么存) · [Scene 与 Event](#scene-与-event) · [怎么召回](#怎么召回) · [Hook 接入](#hook-接入已有聊天宿主) · [Codex 换窗](#codex-换窗包自建前后端) · [召回格式](#召回的是什么格式) · [Arc／叙事卷](#arc与叙事卷) · [自动摘要](#自动摘要) · [论文](#设计与论文) · [雨夜花园](#雨夜花园) · [安装](#一键脚本与开始使用)
 
 ## 功能
 
@@ -84,6 +84,12 @@ Serein 只能读到已进入实例的资料。聊天客户端接上 MCP，并不
 一键安装的实例地址可直接用 Gateway Key（`Authorization: Bearer <Gateway Key>`）访问这个 Hook 接口。模型请求完整成功后，宿主再调用 `POST /v1/host/deliveries` 登记**实际交付**的 ID；失败、中断或仅准备了材料都不登记。宿主为每个会话保留稳定的窗口 ID，并传最近成功交付的 ID 做冷却，避免同一张卡连轮重复出现。Hook 不负责调用聊天模型，也不会自动归档宿主的对话。
 
 可直接参考 [Python Hook 宿主示例](examples/hook_host.py) 和 [接入步骤、请求格式](docs/hook-integration.md)。只连接 MCP 的客户端仍需主动调用工具；需要 Serein 自动完成模型调用与注入时，使用上面的聊天网关。
+
+## Codex 换窗包（自建前后端）
+
+如果聊天界面、后端和会话切换都由你自己管理，可以让后端读取 Serein 的结构化续接资料，再通过 Codex App Server 新建 thread 并预装最新窗影、Scene、Event 和所选原话。这是**自建前后端的接入示例**，不会让 Serein 网页直接控制 Codex，也不需要改写 Codex 的会话文件。
+
+原话会保留原来的 `user` / `assistant` 角色，并随正文带上可供 Serein 精确读回的原文 ID（如 `raw:42`）；若来源提供上游消息 ID，也一并保留为 `source_message_id`。完整流程、安全边界和可运行脚本见 [Codex 换窗包接入说明](docs/codex-continuity-packet.md) 与 [示例目录](examples/codex-continuity-packet/README.md)。
 
 ## 召回的是什么格式
 

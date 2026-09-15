@@ -1,0 +1,69 @@
+{
+  "window_id": "new-window-001",
+  "collection_id": "synthetic-continuity-packet",
+  "items": [
+    {
+      "id": "shadow:old-window-017",
+      "kind": "shadow",
+      "section": "latest_shadow",
+      "title": "上一窗影",
+      "revision": 2,
+      "body_md": "上一窗口正在讨论如何把一次读书会的决定带到新窗口。",
+      "body_offset": 0,
+      "body_complete": true
+    },
+    {
+      "id": "scene:reading-plan",
+      "kind": "scene",
+      "section": "selected_memory",
+      "title": "读书会约定",
+      "revision": 1,
+      "body_md": "大家决定每月选一本短篇集，并保留可以回查的讨论原文。",
+      "body_offset": 0,
+      "body_complete": true
+    },
+    {
+      "id": "event:venue-change",
+      "kind": "event",
+      "section": "recent_event",
+      "title": "地点更新",
+      "revision": 1,
+      "body_md": "本周的读书会地点改到图书馆二层。",
+      "body_offset": 0,
+      "body_complete": true
+    },
+    {
+      "id": "raw:41",
+      "kind": "raw",
+      "section": "recent_original",
+      "title": "2026-09-15T12:00:00+08:00",
+      "revision": 1,
+      "body_md": "新窗口里也要能查回这句话的出处。",
+      "source_system": "synthetic-chat",
+      "session_id": "old-window-017",
+      "source_message_id": "message-0041",
+      "role": "user",
+      "created_at": "2026-09-15T12:00:00+08:00",
+      "body_offset": 0,
+      "body_complete": true
+    },
+    {
+      "id": "raw:42",
+      "kind": "raw",
+      "section": "recent_original",
+      "title": "2026-09-15T12:00:03+08:00",
+      "revision": 1,
+      "body_md": "会保留 Serein 原文 ID，也保留来源消息 ID。",
+      "source_system": "synthetic-chat",
+      "session_id": "old-window-017",
+      "source_message_id": "message-0042",
+      "role": "assistant",
+      "created_at": "2026-09-15T12:00:03+08:00",
+      "body_offset": 0,
+      "body_complete": true
+    }
+  ],
+  "has_more": false,
+  "next_cursor": null,
+  "injected": false
+}
