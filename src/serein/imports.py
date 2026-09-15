@@ -160,7 +160,39 @@ def initialize_imports(database):
                 tagging INTEGER NOT NULL DEFAULT 0);
             CREATE TABLE IF NOT EXISTS import_tag_jobs (document_id TEXT PRIMARY KEY,body_hash TEXT NOT NULL,upload_id TEXT NOT NULL,
                 status TEXT NOT NULL DEFAULT 'pending',attempts INTEGER NOT NULL DEFAULT 0,error TEXT NOT NULL DEFAULT '');
+            CREATE TABLE IF NOT EXISTS tagging_outbox (
+                document_id TEXT PRIMARY KEY
+            );
+            CREATE TRIGGER IF NOT EXISTS tagging_revision_insert AFTER INSERT ON revisions BEGIN
+                INSERT OR IGNORE INTO tagging_outbox(document_id)
+                SELECT NEW.document_id WHERE EXISTS (
+                    SELECT 1 FROM documents WHERE id=NEW.document_id AND kind IN ('event','scene'));
+            END;
+            CREATE TRIGGER IF NOT EXISTS tagging_binding_insert AFTER INSERT ON evidence_bindings BEGIN
+                INSERT OR IGNORE INTO tagging_outbox(document_id)
+                SELECT NEW.document_id WHERE EXISTS (
+                    SELECT 1 FROM documents WHERE id=NEW.document_id AND kind IN ('event','scene'));
+            END;
+            CREATE TRIGGER IF NOT EXISTS tagging_binding_update AFTER UPDATE ON evidence_bindings BEGIN
+                INSERT OR IGNORE INTO tagging_outbox(document_id)
+                SELECT NEW.document_id WHERE EXISTS (
+                    SELECT 1 FROM documents WHERE id=NEW.document_id AND kind IN ('event','scene'));
+            END;
+            CREATE TRIGGER IF NOT EXISTS tagging_binding_delete AFTER DELETE ON evidence_bindings BEGIN
+                INSERT OR IGNORE INTO tagging_outbox(document_id)
+                SELECT OLD.document_id WHERE EXISTS (
+                    SELECT 1 FROM documents WHERE id=OLD.document_id AND kind IN ('event','scene'));
+            END;
+            CREATE TRIGGER IF NOT EXISTS tagging_document_lifecycle AFTER UPDATE OF lifecycle ON documents
+            WHEN NEW.kind IN ('event','scene') BEGIN
+                INSERT OR IGNORE INTO tagging_outbox(document_id) VALUES (NEW.id);
+            END;
         ''')
+        marker=store.conn.execute("SELECT 1 FROM background_state WHERE name='tagging_outbox_seeded_v1'").fetchone()
+        if not marker:
+            store.conn.execute("INSERT OR IGNORE INTO tagging_outbox(document_id) "
+                "SELECT id FROM documents WHERE kind IN ('event','scene') AND lifecycle='active'")
+            store.conn.execute("INSERT INTO background_state(name,value_json) VALUES ('tagging_outbox_seeded_v1','{\"status\":\"done\"}')")
         archive_imported_originals(store.conn)
 
 

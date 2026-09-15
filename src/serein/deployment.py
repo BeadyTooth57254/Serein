@@ -24,7 +24,7 @@ DEFAULT_DOMAINS = [
     {'key':'general','label':'通用','description':'其他无法归入上述主域的经历','policy':'normal'},
 ]
 TASKS = ('chat', 'writer', 'embedding', 'reranker', 'relations', 'dreams', 'narrative_scout', 'event_pipeline',
-         'persona', 'anti_retreat', 'track_router', 'event_curator', 'event_writer', 'operit_tagging')
+         'persona', 'anti_retreat', 'track_router', 'event_curator', 'event_writer', 'operit_tagging', 'arc_linker')
 
 
 def read_from_store(store):

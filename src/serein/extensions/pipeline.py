@@ -415,6 +415,10 @@ def extend_context(database,component,context_request):
 
 
 def settle(database,batch,data,routed,plans):
+    arc_linking_enabled=bool(read_settings(database)['assignments'].get('arc_linker'))
+    if arc_linking_enabled:
+        from ..arc_linking import initialize as initialize_arc_linking
+        initialize_arc_linking(database)
     items=[];details=[];processed={};all_new={m['id'] for m in data['messages']}
     for component,plan,event_results in plans:
         processed.update({key:'skipped' for key in plan['skip_source_message_ids']})
@@ -450,6 +454,10 @@ def settle(database,batch,data,routed,plans):
             key=conn.execute('SELECT item_id FROM fact_events WHERE origin_id=?',(item['origin_id'],)).fetchone()[0]
             conn.execute('INSERT OR IGNORE INTO pipeline_track_events VALUES (?,?)',(detail['track_id'],key))
             conn.execute('INSERT OR REPLACE INTO pipeline_event_details VALUES (?,?)',(key,encode(detail)))
+            if arc_linking_enabled:
+                from ..arc_linking import enqueue
+                fingerprint=conn.execute('SELECT fingerprint FROM fact_events WHERE item_id=?',(key,)).fetchone()[0]
+                enqueue(conn,key,fingerprint)
         for key,outcome in processed.items():conn.execute('INSERT OR IGNORE INTO raw_processing VALUES (?,?,?)',(key,batch['id'],outcome))
         conn.execute("UPDATE pipeline_batches SET status='done',result_json=? WHERE id=?",(encode(result),batch['id']))
     if items:

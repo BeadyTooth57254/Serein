@@ -7,7 +7,7 @@ import {RecallThresholdSettings} from './RecallThresholdSettings.jsx';
 
 const tasks = {writer:"Narrative Writer",embedding:"Embedding",reranker:"Reranker",
   relations:"Scene 关系",dreams:"梦境",narrative_scout:"叙事卷找材料",persona:"心绪/防撤退",
-  track_router:"原话 · 归线",event_curator:"原话 · 切分与转录",event_writer:"原话 · Event 写作",operit_tagging:"打标"};
+  track_router:"原话 · 归线",event_curator:"原话 · 切分与转录",event_writer:"原话 · Event 写作",operit_tagging:"打标",arc_linker:"Event · Arc 归档"};
 
 export function ModelSettings({page,summaryRequest=0,onOpenPipeline,onOpenCatalog,onOpenAssignments,
   recallThreshold,setRecallThreshold,candidateThresholdDraft,setCandidateThresholdDraft,
@@ -104,6 +104,7 @@ export function ModelSettings({page,summaryRequest=0,onOpenPipeline,onOpenCatalo
         </select></label>)}</div>
       <p className="model-connection-help">Event Writer 要核对原话、人物、因果和修订，再写出自然正文；建议为“原话 · Event 写作”选择理解和写作能力较强的模型。</p>
       <p className="model-connection-help">“打标”为事件和 Scene 补充主域大标签、提取有原文出处的实体，也为长记忆已有的 cues 绑定 passage。已有主域和正文保持不变；实体别名只留作建议。主域与短描述在地下室的“主域边界”管理。</p>
+      <p className="model-connection-help">“Event · Arc 归档”为可选任务：先按 Event 正文中的关键词缩小已有 Arc，再让模型判断是否归入。它不读取聊天原话或叙事卷正文，不创建新 Arc；留空即关闭。</p>
       {config.assignments.dreams&&<><label className="settings-field"><span>每日做梦概率（%）</span>
         <input type="number" min="0" max="100" step="1" value={Math.round((config.dream?.daily_probability??0.4)*100)}
           onChange={event=>setConfig(current=>({...current,dream:{...current.dream,daily_probability:Number(event.target.value)/100}}))}/>

@@ -120,26 +120,36 @@ async def tag_one(database,job):
     with Store(database) as store:
         store.conn.execute('UPDATE import_tag_jobs SET status=?,attempts=attempts+1,error=? WHERE document_id=? AND body_hash=?',
             (status,error,job['document_id'],job['body_hash']))
+        if status=='done':
+            store.conn.execute('DELETE FROM tagging_outbox WHERE document_id=?',(job['document_id'],))
 
 
 async def process(database):
     initialize_imports(database)
     if not task_model(database,'operit_tagging'):return
     with Store(database) as store:
-        for row in store.conn.execute("SELECT id FROM documents WHERE kind IN ('scene','event') AND lifecycle='active'").fetchall():
-            doc=store.read(row[0]);meta=doc['metadata']
-            if meta.get('legacy_tagging_pending'):continue  # Migration owns this paid call.
+        changed=store.conn.execute('SELECT document_id FROM tagging_outbox ORDER BY rowid LIMIT 100').fetchall()
+        for row in changed:
+            doc=store.read(row[0])
+            if not doc or doc['kind'] not in ('scene','event') or doc['lifecycle']!='active':
+                store.conn.execute('DELETE FROM tagging_outbox WHERE document_id=?',(row[0],));continue
+            meta=doc['metadata']
+            if meta.get('legacy_tagging_pending'):
+                store.conn.execute('DELETE FROM tagging_outbox WHERE document_id=?',(doc['id'],));continue  # Migration owns this paid call.
             job=store.conn.execute('SELECT * FROM import_tag_jobs WHERE document_id=?',(doc['id'],)).fetchone()
-            if 'operit_original' in meta and not job:continue  # Respect import opt-out.
+            if 'operit_original' in meta and not job:
+                store.conn.execute('DELETE FROM tagging_outbox WHERE document_id=?',(doc['id'],));continue  # Respect import opt-out.
             _,stamp=snapshot(store,doc)
             missing_cues=needs_operit_cues(doc)
-            if meta.get('entity_extraction_version')==VERSION and meta.get('entity_input_hash')==stamp and not missing_cues:continue
+            if meta.get('entity_extraction_version')==VERSION and meta.get('entity_input_hash')==stamp and not missing_cues:
+                store.conn.execute('DELETE FROM tagging_outbox WHERE document_id=?',(doc['id'],));continue
             if job and not job['body_hash'].startswith('entities-v1:') and job['body_hash']!=digest(doc['body_md']):
-                continue  # An edited legacy import retains its original skip contract.
+                store.conn.execute('DELETE FROM tagging_outbox WHERE document_id=?',(doc['id'],));continue  # An edited legacy import retains its original skip contract.
             store.conn.execute("INSERT INTO import_tag_jobs(document_id,body_hash,upload_id) VALUES (?,?,'') "
                 "ON CONFLICT(document_id) DO UPDATE SET body_hash=excluded.body_hash,status='pending',attempts=0,error='' "
                 "WHERE import_tag_jobs.body_hash!=excluded.body_hash OR import_tag_jobs.status='stale' "
                 "OR (import_tag_jobs.status='done' AND ?)",(doc['id'],stamp,missing_cues))
+            store.conn.execute('DELETE FROM tagging_outbox WHERE document_id=?',(doc['id'],))
     with Store(database,read_only=True) as store:
         jobs=[dict(row) for row in store.conn.execute("SELECT j.* FROM import_tag_jobs j LEFT JOIN file_imports f ON f.id=j.upload_id "
              "WHERE j.status='pending' AND (j.upload_id='' OR f.cursor=json_array_length(f.payload_json,'$.entries')) ORDER BY j.rowid LIMIT 2")]

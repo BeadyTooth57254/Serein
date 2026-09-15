@@ -68,6 +68,19 @@ def test_three_stages_and_writer_sees_exact_predecessor_originals(settings):
         assert set(detail['source_activity_roles'])=={'1','2'}
 
 
+def test_settled_event_is_queued_only_when_arc_linker_is_selected(settings):
+    save_settings(settings.database,{
+        'models':[{'id':'local','model':'synthetic','base_url':'http://127.0.0.1:9/v1'}],
+        'assignments':{'arc_linker':'local'}})
+    ingest(settings)
+    result=asyncio.run(p.advance(settings.database,include_recent=True,runner=synthetic_runner))
+    assert result['events']==1
+    with Store(settings.database,read_only=True) as store:
+        row=store.conn.execute('SELECT event_id,event_fingerprint,status FROM pipeline_arc_links').fetchone()
+        fact=store.conn.execute('SELECT item_id,fingerprint FROM fact_events WHERE status=\'active\'').fetchone()
+        assert tuple(row)==(fact['item_id'],fact['fingerprint'],'pending')
+
+
 def test_native_bridge_writer_contract_has_no_fixed_body_limit():
     request={'messages':[{'id':1,'content':'A book was returned'}]}
     output=output_for('event_writer',request)

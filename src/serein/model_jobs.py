@@ -20,7 +20,7 @@ async def run(application):
     try:
         while True:
             config=read_settings(settings.database)
-            for feature in ('relations','dreams','narrative_revision','event_pipeline','operit_tagging'):
+            for feature in ('relations','dreams','narrative_revision','event_pipeline','operit_tagging','arc_linker'):
                 if feature in application.enabled_extensions or (feature == 'narrative_revision' and
                         'narrative_scout' in application.enabled_extensions):continue
                 selected=config['assignments'].get(feature)
@@ -43,6 +43,9 @@ async def run(application):
                         elif feature=='operit_tagging':
                             from .import_tagging import run as tag_imports
                             coroutine=tag_imports(settings)
+                        elif feature=='arc_linker':
+                            from .arc_linking import run as link_arcs
+                            coroutine=link_arcs(settings)
                         else:
                             coroutine=BackgroundJobs(settings,features={feature}).run()
                         running[feature]=(signature,asyncio.create_task(coroutine,name='configured:'+feature))
