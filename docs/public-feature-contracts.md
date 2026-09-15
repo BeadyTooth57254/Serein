@@ -64,7 +64,7 @@ Scene 和日记的新建调用会独立创建内容；内部随机操作编号�
 
 `features.memos`、`persona`、`anti_retreat`、`window_shadows`、`association`、`relations_auto_accept`、`resume`、`originals`、`narrative_tools` 默认 false，写入实例数据库。备忘的界面名称统一为“备忘”，描述为“留给未来的话”。保存后后续请求直接读取，停止注入而不清空原有记录。
 
-“联想”（`features.association`）是独立开关，位于设置 → 功能；保存后下一次召回生效，无需重启或重建索引。关闭时只走直接召回，不查询关系边或返回召回关联诊断列表，保留已有关系及其管理功能。开启时从直接 Scene 候选的已确认关系中最多补一条 Scene，与六条直接候选共用一次 reranker，仍需达到 0.65，最多两卡，选卡后冷却且不补位。联想不自动开启“关系提案自动通过”，自动通过也不自动开启联想；旧实例缺少此字段按关闭处理。
+“联想”（`features.association`）是独立开关，位于设置 → 功能；保存后下一次召回生效，无需重启或重建索引。关闭时只走直接召回，不查询关系边或返回召回关联诊断列表，保留已有关系及其管理功能。直接候选前 6 条向量结果保底，第 7–20 条须达到整篇／片段 0.50、cue 语义 0.55、Event 特定关键词或带回忆意图的完整实体名之一；扩展信号各最多 3 条，只取得 reranker 资格，不加分。开启联想后，从直接 Scene 候选的已确认关系中最多再补一条 Scene，共用一次 reranker，仍需达到 0.65，最多两卡，选卡后冷却且不补位。联想不自动开启“关系提案自动通过”，自动通过也不自动开启联想；旧实例缺少此字段按关闭处理。
 
 备忘开启时注册 `memo_create`、`memo_list`、`memo_update`；窗影开启时只注册 `window_shadow_write`；开窗续接使用 `/resume` 指令；原话查阅开启时注册 `source_message_search`、`source_message_read`。MCP 的 tools/list 和 tools/call 都重新核对开关，HTTP 同样处理关闭状态。客户端应刷新工具列表；即使缓存着旧列表，关闭的工具也不能调用。白名单继续限制可以出现的工具。
 

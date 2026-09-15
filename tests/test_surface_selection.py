@@ -40,20 +40,22 @@ def legacy(tmp_path,monkeypatch):
     return settings,build
 
 
-def test_mixed_pool_has_no_type_quota_and_keeps_six_total(legacy):
+def test_mixed_pool_has_no_type_quota_and_keeps_six_base_vectors(legacy):
     settings,build=legacy
     engine,calls=build([(f's{i}','scene',.90-i*.02,'2026-09-01') for i in range(5)] +
                        [(f'e{i}','event',.99-i*.02,'2026-09-01') for i in range(5)])
     result=engine.run('手机维修',method='semantic',min_cosine=.5)
-    assert [d['ref'] for d in calls]==['event:e0','event:e1','event:e2','event:e3','event:e4','scene:s0']
+    assert [d['ref'] for d in calls]==['event:e0','event:e1','event:e2','event:e3','event:e4',
+                                        'scene:s0','scene:s1','scene:s2','scene:s3','scene:s4']
     assert result['selected_refs']==['event:e0','event:e1']
-    assert result['candidate_policy']['pool_limit']==6
-    assert result['candidate_policy']['direct_pool_limit']==6
+    assert result['candidate_policy']['base_vector_pool_limit']==6
+    assert result['candidate_policy']['direct_pool_limit']==20
 
 
 def test_rejected_top_six_do_not_promote_seventh_memory(legacy):
     _,build=legacy
-    engine,_=build([(f's{i}','scene',.90-i*.02,'2026-09-01') for i in range(7)])
+    engine,_=build([(f's{i}','scene',.90-i*.02,'2026-09-01') for i in range(6)]+
+                   [('s6','scene',.49,'2026-09-01')])
     seen=[]
     def score(query,docs):
         seen.extend(d['ref'] for d in docs)
@@ -182,6 +184,32 @@ def test_provider_auth_failure_is_visible_without_admitting_candidates(legacy):
     assert not result['selected_refs'] and result['reranker_error']=='http_401'
 
 
+def test_replaced_and_scene_covered_events_are_filtered_before_reranker(legacy,monkeypatch):
+    settings,build=legacy
+    engine,_=build([('replaced','event',.99,'2026-09-01'),('covered','event',.98,'2026-09-01'),
+                    ('keep','event',.97,'2026-09-01'),('cover','scene',.96,'2026-09-01'),
+                    ('archived','event',.95,'2026-09-01'),('manual','event',.94,'2026-09-01')])
+    with Store(settings.database) as store:
+        source=store.add_source('chat:1','同一条完整原话')
+        store.bind('covered',source)
+        store.bind('cover',source)
+        store.conn.execute("INSERT INTO event_replacements VALUES ('replaced','successor','test','{}')")
+        store.set_lifecycle('archived','archived')
+        store.set_manual_surface('manual',False)
+    seen=[]
+    def rank(query,docs):
+        seen.extend(row['ref'] for row in docs)
+        return {row['ref']:.1 for row in docs}
+    engine.reranker=rank
+    monkeypatch.setattr('serein.core.reader.Reader.read',lambda *a,**kw:pytest.fail('candidate snapshot used Reader.read'))
+    result=engine.run('手机维修',method='semantic',min_cosine=.5)
+    assert set(seen)=={'event:keep','scene:cover'}
+    assert result['candidate_retrieval']['snapshot_suppressed']['replaced_by_event']==1
+    assert result['candidate_retrieval']['snapshot_suppressed']['covered_by_scene']==1
+    assert result['candidate_retrieval']['snapshot_suppressed']['lifecycle_not_active']==1
+    assert result['candidate_retrieval']['snapshot_suppressed']['manual_surface_not_enabled']==1
+
+
 def link_scenes(settings, edges, *, association=True):
     if association:save_settings(settings.database,{'features':{'association':True}})
     with Store(settings.database) as store:
@@ -193,7 +221,7 @@ def link_scenes(settings, edges, *, association=True):
 def test_one_best_reviewed_neighbor_joins_the_same_reranker_batch(legacy):
     settings,build=legacy
     engine,calls=build([(f's{i}','scene',.9-i*.02,'2026-09-01') for i in range(6)]+
-        [('unreviewed','scene',.79,'2026-09-01'),('hop2','scene',.6,'2026-09-01'),
+        [('unreviewed','scene',.49,'2026-09-01'),('hop2','scene',.48,'2026-09-01'),
          ('neighbor','scene',.4,'2026-09-01'),('other','scene',.3,'2026-09-01')])
     link_scenes(settings,[('a','s0','other',1),('b','s0','neighbor',1),
         ('c','s1','neighbor',1),('d','s0','s1',1),('e','neighbor','hop2',1)])
@@ -242,7 +270,7 @@ def test_relation_slot_does_not_bypass_domains_exclusions_or_inactive_edges(lega
     link_scenes(settings,[(key,'s0',key,int(key!='inactive')) for key in ('tech','excluded','archived','inactive')])
     with Store(settings.database) as store:store.set_lifecycle('archived','archived')
     result=engine.run('手机维修',method='semantic',min_cosine=.5,exclude_ids=['scene:excluded'])
-    assert len(calls)==6 and all(d['ref'].startswith('scene:s') for d in calls)
+    assert len(calls)==7 and all(d['ref'].startswith('scene:s') or d['ref']=='scene:inactive' for d in calls)
     assert all(d['candidate_origin']=='direct' for d in result['candidate_scores'])
 
 
@@ -299,7 +327,7 @@ def test_association_api_toggle_is_persistent_live_and_independent(legacy,monkey
     enabled=engine.run('手机维修',method='semantic',min_cosine=.5)  # Same Recall instance, no restart/index rebuild.
     assert len(additions)==1 and len(batches)==2
     assert batches[-1]==batches[0]+['scene:neighbor']
-    assert enabled['candidate_policy']['pool_limit']==7
+    assert enabled['candidate_policy']['pool_limit']==21
     assert enabled['candidate_policy']['association_enabled'] is True
     assert enabled['selected_refs']==before['selected_refs']  # No reserved final slot.
 
