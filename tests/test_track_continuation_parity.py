@@ -51,6 +51,22 @@ def test_unanswered_tails_do_not_count_and_proactive_reply_completes_round():
     assert len(flushable_dialogue_units([proactive, reply], now=end + timedelta(minutes=20))) == 1
 
 
+def test_unanswered_proactive_message_reopens_silence_without_counting_a_round():
+    messages = exchanges(5)
+    end = datetime.fromisoformat(messages[-1]['created_at'])
+    proactive = {'id': 11, 'session_id': 1, 'role': 'assistant', 'text': 'Synthetic wake',
+                 'metadata': {'proactive': True},
+                 'created_at': (end + timedelta(minutes=15)).isoformat()}
+    # The five completed rounds are old enough by the original clock, but the
+    # unanswered proactive message opens a fresh response window.
+    assert flushable_dialogue_units(messages + [proactive],
+                                    now=end + timedelta(minutes=20)) == []
+    ready = flushable_dialogue_units(messages + [proactive],
+                                     now=end + timedelta(minutes=35))
+    assert len(ready) == 5
+    assert all(proactive not in unit for unit in ready)
+
+
 def test_daytime_gate_accumulates_within_session_and_keeps_originals(settings, monkeypatch):
     current = datetime(2026, 9, 14, 2, tzinfo=timezone.utc)
     class Clock(datetime):
