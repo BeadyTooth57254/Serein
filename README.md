@@ -261,8 +261,8 @@ bash scripts/one_click.sh
 | 保存与管理记忆 | `write_scene`、`edit_scene`、`set_scene_status`、`set_memory_state`、`annotate` | 可写实例；分别新建 Scene、局部修改 Scene、管理状态与自动浮现资格；收藏修改另需开启收藏工具。自动 Event 正文由摘要流水线维护 |
 | 记忆候选 | `propose_memory`、`list_candidates`、`review_memory` | 可写实例；提出、接受 Scene 候选，未接受的候选不作为正式记忆召回；历史 Event / Narrative 候选可查看或忽略，不在此接受 |
 | 日记与暗室 | `read_diary`、`write_diary`、`revise_diary`、`comment_diary`、`delete_diary` | 可写实例；写条目、评论和软删除，保留作者与暗室解锁约束 |
-| 重试索引更新 | `index_sync` | 可写实例；处理记忆已保存但索引尚未同步的任务 |
-| 自动摘要 Agent | `pipeline_next`、`pipeline_submit` | 可写实例；领取冻结的阶段任务、提交结果，具体执行方式见 [扩展说明](docs/extensions.md) |
+| 重试索引更新 | `index_sync` | 默认作为 MCP 维护工具暴露给模型，可由 `mcp_tools` 白名单隐藏；仅限可写实例，处理记忆已保存但索引尚未同步的任务 |
+| 自动摘要 Agent | `pipeline_next`、`pipeline_submit` | 暴露给自动摘要专用 Agent 的 MCP 任务协议，不是主聊天模型的日常工具，也可由 `mcp_tools` 白名单隐藏；仅限可写实例，负责领取冻结任务、提交结果，具体执行方式见 [扩展说明](docs/extensions.md) |
 
 `write_scene` 按自用版方式调用，只必填 `content` 和 `cues`（1–8 条，每条最多 80 字符）；`title`、`date`、`domain` 可选，默认不绑定证据。ID 和内部操作编号自动生成。`edit_scene` 传 `scene_id`、读回的 `expected_updated_at` 和要改的 title/content/cues。日记恢复独立的 `read_diary`、`write_diary`、`revise_diary`、`comment_diary`、`delete_diary`，批注使用 `annotate`。新工具不需要模型管理 operation_id 或数字版本号；响应丢失时先读回确认，避免重复新建。完整 rc65 旧参数仍保留内部兼容。升级后刷新工具列表。叙事卷和 Event 各自的写入边界不变。
 
