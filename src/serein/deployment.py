@@ -6,13 +6,14 @@ import os
 from copy import deepcopy
 from urllib.parse import urlsplit
 from uuid import uuid4, uuid5, NAMESPACE_URL
-from .core.store import Store, encode, Conflict
+from .core.store import Store, encode, Conflict, now
 
 DEFAULT_IDENTITY = {'user_name': 'User', 'ai_name': 'AI'}
 DEFAULT_UPSTREAM = {'base_url': '', 'model': '', 'writer_model': '', 'api_key': '',
                     'writer_enabled': False, 'memory_enabled': False, 'operit_enabled': True}
 DEFAULT_FEATURES = {'memos':False, 'persona':False, 'anti_retreat':False, 'window_shadows':False, 'association':False, 'write_context':False, 'relations_auto_accept':False, 'resume':False, 'originals':False, 'favorites':False, 'narrative_tools':False, 'event_to_scene':False, 'index_sync_tool':False}
-DEFAULT_RESUME = {'latest_shadow':True, 'recent_events':True, 'favorite_scenes':True, 'selected_memories':False, 'selected_ids':[], 'pending_originals':True}
+DEFAULT_RESUME = {'latest_shadow':True, 'recent_events':True, 'favorite_scenes':True, 'selected_memories':False, 'selected_ids':[],
+                  'recent_originals':False, 'recent_original_limit':20, 'pending_originals':True}
 DEFAULT_DOMAINS = [
     {'key':'relationship','label':'关系','description':'身份、称呼、承诺、边界与沟通方式','policy':'normal'},
     {'key':'intimacy','label':'亲密','description':'身体、欲望与具身互动','policy':'normal'},
@@ -113,8 +114,15 @@ def read_settings(database, *, public=False):
 
 
 def save_settings(database, changes):
+    changes=deepcopy(changes)
+    resume_changes=changes.get('resume') or {}
+    if resume_changes.get('recent_originals') is True:
+        resume_changes['pending_originals']=False
+    elif resume_changes.get('pending_originals') is True:
+        resume_changes['recent_originals']=False
     with Store(database) as store, store.transaction(immediate=True):
         current = read_from_store(store)
+        previous_auto_enabled = current['pipeline']['auto_enabled']
         stored=store.conn.execute("SELECT value_json FROM background_state WHERE name='deployment_settings'").fetchone()
         explicit_mode='execution_mode' in (json.loads(stored[0]).get('pipeline',{}) if stored else {}) or 'execution_mode' in changes.get('pipeline',{})
         if changes.get('expected_version') is not None and changes['expected_version'] != current['settings_version']:
@@ -164,11 +172,30 @@ def save_settings(database, changes):
                 if not model:raise ValueError('API 自动摘要需要为三个阶段选择模型')
                 if not model.get('api_key') and urlsplit(model['base_url']).hostname not in ('localhost','127.0.0.1','::1'):
                     raise ValueError('API 自动摘要所选上游缺少访问密钥')
+        if not previous_auto_enabled and current['pipeline']['auto_enabled']:
+            _advance_pipeline_auto_boundary(store,current['settings_version']+1)
         current['settings_version'] += 1
         if not explicit_mode:current['pipeline'].pop('execution_mode',None)
         store.conn.execute("INSERT INTO background_state(name,value_json) VALUES ('deployment_settings',?) "
                            "ON CONFLICT(name) DO UPDATE SET value_json=excluded.value_json", (encode(current),))
     return read_settings(database, public=True)
+
+
+def _advance_pipeline_auto_boundary(store, settings_version):
+    """Start automatic Event work after the latest original present at enable time."""
+    if not store.conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='raw_events'").fetchone():
+        return
+    store.conn.execute('CREATE TABLE IF NOT EXISTS raw_processing('
+                       'raw_id INTEGER PRIMARY KEY,operation_id TEXT NOT NULL,outcome TEXT NOT NULL)')
+    cursor=store.conn.execute('SELECT COALESCE(MAX(id),0) FROM raw_events').fetchone()[0]
+    operation_id=f'pipeline:auto-enable:{settings_version}:{cursor}'
+    inserted=store.conn.execute("INSERT OR IGNORE INTO raw_processing(raw_id,operation_id,outcome) "
+        "SELECT id,?,'auto_boundary' FROM raw_events WHERE id<=?",(operation_id,cursor)).rowcount
+    if store.conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='pipeline_batches'").fetchone():
+        store.conn.execute("UPDATE pipeline_batches SET status='superseded_auto_boundary' WHERE status='pending'")
+    state={'raw_id':cursor,'skipped_originals':inserted,'moved_at':now(),'settings_version':settings_version}
+    store.conn.execute("INSERT INTO background_state(name,value_json) VALUES ('pipeline_auto_boundary',?) "
+                       "ON CONFLICT(name) DO UPDATE SET value_json=excluded.value_json",(encode(state),))
 
 
 def identity(database):

@@ -146,6 +146,8 @@ class ResumePatch(BaseModel):
     recent_events: bool | None = None
     favorite_scenes: bool | None = None
     selected_memories: bool | None = None
+    recent_originals: bool | None = None
+    recent_original_limit: int | None = Field(default=None, ge=1, le=50, strict=True)
     pending_originals: bool | None = None
     selected_ids: list[str] | None = Field(default=None, max_length=200)
 

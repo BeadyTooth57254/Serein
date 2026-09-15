@@ -548,7 +548,7 @@ async def _flush_routes_frozen(database):
         upload=''
         if store.conn.execute("SELECT 1 FROM sqlite_master WHERE name='file_imports'").fetchone():
             upload=" AND (json_extract(r.metadata_json,'$.import_upload_id') IS NULL OR json_extract(r.metadata_json,'$.import_upload_id') IN (SELECT id FROM file_imports WHERE cursor=json_array_length(payload_json,'$.entries')))"
-        rows=[message(r) for r in store.conn.execute("SELECT r.* FROM raw_events r WHERE NOT EXISTS (SELECT 1 FROM pipeline_routes p WHERE p.raw_id=r.id) AND NOT EXISTS (SELECT 1 FROM raw_processing p WHERE p.raw_id=r.id AND p.outcome='archived_only')"+upload+' ORDER BY r.id')]
+        rows=[message(r) for r in store.conn.execute("SELECT r.* FROM raw_events r WHERE NOT EXISTS (SELECT 1 FROM pipeline_routes p WHERE p.raw_id=r.id) AND NOT EXISTS (SELECT 1 FROM raw_processing p WHERE p.raw_id=r.id)"+upload+' ORDER BY r.id')]
     sessions={}
     for row in rows:sessions.setdefault((row['source'],row['original_session_id']),[]).append(row)
     current=datetime.now(timezone.utc)

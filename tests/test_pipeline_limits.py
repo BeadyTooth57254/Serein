@@ -249,3 +249,28 @@ def test_auto_pause_does_not_route_originals_or_replace_progress(settings,monkey
     with Store(settings.database,read_only=True) as store:before='\n'.join(store.conn.iterdump())
     assert asyncio.run(p.scheduled_advance(settings.database))=={'status':'auto_paused'}
     with Store(settings.database,read_only=True) as store:assert '\n'.join(store.conn.iterdump())==before
+
+
+def test_enabling_auto_pipeline_starts_after_latest_original_and_reenable_moves_boundary(settings):
+    p.initialize(settings.database)
+    save_settings(settings.database,{'pipeline':{'auto_enabled':False}})
+    ingest(settings,1)
+    with Store(settings.database) as store:
+        store.conn.execute("INSERT INTO pipeline_batches(id,scope,input_json) VALUES ('old-pending','scope','{}')")
+    save_settings(settings.database,{'pipeline':{'auto_enabled':True}})
+    with Store(settings.database,read_only=True) as store:
+        assert [tuple(row) for row in store.conn.execute('SELECT raw_id,outcome FROM raw_processing ORDER BY raw_id')]==[(1,'auto_boundary'),(2,'auto_boundary')]
+        assert store.conn.execute("SELECT status FROM pipeline_batches WHERE id='old-pending'").fetchone()[0]=='superseded_auto_boundary'
+        boundary=json.loads(store.conn.execute("SELECT value_json FROM background_state WHERE name='pipeline_auto_boundary'").fetchone()[0])
+        assert boundary['raw_id']==2 and boundary['skipped_originals']==2
+    ingest(settings,2)
+    save_settings(settings.database,{'resume':{'recent_original_limit':12}})
+    with Store(settings.database,read_only=True) as store:
+        assert [row[0] for row in store.conn.execute('SELECT id FROM raw_events WHERE NOT EXISTS (SELECT 1 FROM raw_processing p WHERE p.raw_id=raw_events.id) ORDER BY id')]==[3,4]
+    save_settings(settings.database,{'pipeline':{'auto_enabled':False}})
+    ingest(settings,3)
+    save_settings(settings.database,{'pipeline':{'auto_enabled':True}})
+    ingest(settings,4)
+    with Store(settings.database,read_only=True) as store:
+        assert [row[0] for row in store.conn.execute("SELECT raw_id FROM raw_processing WHERE outcome='auto_boundary' ORDER BY raw_id")]==[1,2,3,4,5,6]
+        assert [row[0] for row in store.conn.execute('SELECT id FROM raw_events WHERE NOT EXISTS (SELECT 1 FROM raw_processing p WHERE p.raw_id=raw_events.id) ORDER BY id')]==[7,8]

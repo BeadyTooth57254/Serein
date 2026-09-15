@@ -104,6 +104,19 @@ def test_unset_recall_threshold_preserves_toml(deployment):
     assert client.get('/v1/settings').json()['recall']['direct_threshold']==.78
 
 
+def test_recent_original_resume_limit_validation(deployment):
+    _,client=deployment
+    recent=client.patch('/v1/settings',json={'resume':{'recent_originals':True,'recent_original_limit':1}})
+    assert recent.status_code==200 and recent.json()['resume']['pending_originals'] is False
+    pending=client.patch('/v1/settings',json={'resume':{'pending_originals':True}})
+    assert pending.status_code==200 and pending.json()['resume']['recent_originals'] is False
+    both=client.patch('/v1/settings',json={'resume':{'recent_originals':True,'pending_originals':True}})
+    assert both.status_code==200 and both.json()['resume']['recent_originals'] is True and both.json()['resume']['pending_originals'] is False
+    assert client.patch('/v1/settings',json={'resume':{'recent_original_limit':50}}).status_code==200
+    for value in (0,51,True,'20'):
+        assert client.patch('/v1/settings',json={'resume':{'recent_original_limit':value}}).status_code==422
+
+
 def test_retired_event_model_is_ignored_without_changing_saved_settings_on_read(deployment):
     from serein.core.store import Store, encode
     from serein.extensions.pipeline import ROLES

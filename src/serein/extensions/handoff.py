@@ -5,6 +5,7 @@ import json
 from . import Contributions
 from ..core.store import Store, Conflict, encode, now
 from ..core.reader import Reader
+from ..compat.originals import READABLE, TIME
 
 
 def factory(services, options):
@@ -34,7 +35,7 @@ def factory(services, options):
             return {'key':key,'revision':revision,'status':'saved'}
 
     def resume(window_id: str = 'main', cursor: str = '', handoff_key: str = '', source_session_id: str = ''):
-        """Read selected continuity sections: latest shadow, ten recent Events, favorite Scenes, selected memories and pending originals. Call with no arguments to start; window_id is optional and defaults to main. Pass next_cursor as cursor until all pages are read; do not rewrite a portrait."""
+        """Read selected continuity sections: latest shadow, ten recent Events, favorite Scenes, selected memories, recent originals and pending originals. Call with no arguments to start; window_id is optional and defaults to main. Pass next_cursor as cursor until all pages are read; do not rewrite a portrait."""
         from ..deployment import read_settings
         from ..compat.window_shadows import latest_shadow
         state = read_settings(database)
@@ -83,6 +84,21 @@ def factory(services, options):
                     if len(recent_events)==10:break
             favorite_ids={d['id'] for d in documents}
             documents.extend(item for item in reversed(recent_events) if item['id'] not in favorite_ids)
+            raw_ids=set()
+            recent_raw=[]
+            if selection['recent_originals']:
+                sql='SELECT r.* FROM raw_events r WHERE '+READABLE
+                params=[]
+                if source_session_id:
+                    sql+=' AND r.session_id=?';params.append(source_session_id)
+                recent_raw=reader.store.conn.execute(sql+f' ORDER BY {TIME} DESC,r.id DESC LIMIT ?',
+                    (*params,selection['recent_original_limit'])).fetchall()
+                for row in reversed(recent_raw):
+                    raw_ids.add(row['id'])
+                    documents.append({'id':f"raw:{row['id']}",'kind':'raw','section':'recent_original',
+                        'title':row['created_at'] or 'Original message','revision':1,'body_md':row['text'],
+                        'source_system':row['source'],'session_id':row['session_id'],'raw_id':row['id'],
+                        'source_message_id':row['source_event_id'] or str(row['id']),'role':row['role'],'created_at':row['created_at']})
             has_processing = reader.store.conn.execute("SELECT 1 FROM sqlite_master WHERE name='raw_processing'").fetchone()
             pending_clause = 'NOT EXISTS (SELECT 1 FROM raw_processing p WHERE p.raw_id=r.id)' if has_processing else '1=1'
             raw = reader.store.conn.execute('SELECT r.* FROM raw_events r WHERE '+pending_clause+
@@ -90,6 +106,7 @@ def factory(services, options):
                 (source_session_id,) if source_session_id else ()).fetchall()
             if not selection['pending_originals']:raw=[]
             for row in raw:
+                if row['id'] in raw_ids:continue
                 documents.append({'id':f"raw:{row['id']}",'kind':'raw','section':'pending_original',
                     'title':row['created_at'] or 'Original message','revision':1,'body_md':row['text'],
                     'source_system':row['source'],'session_id':row['session_id'], 'raw_id':row['id'],
@@ -127,8 +144,9 @@ def factory(services, options):
         return {'window_id':window_id,'collection_id':generation,'selection':selection,
                 'favorite_ids':[d['id'] for d in items if d['section']=='favorite'],
                 'event_ids':[d['id'] for d in items if d['section']=='recent_event'],
-                'raw_message_ids':[d['raw_id'] for d in items if d['section']=='pending_original'],
+                'raw_message_ids':[d['raw_id'] for d in items if d['kind']=='raw'],
                 'total_selected_memories':selected_count,'total_favorites':favorite_count,'total_recent_events':len(recent_events),'total_pending_originals':len(raw),
+                'total_recent_originals':len(recent_raw),
                 'items':items,'handoff':note if not cursor else None,'has_more':more,
                 'next_cursor':f'{generation}:{index}:{offset}' if more else None,
                 'body_budget_chars':budget,'injected':False,

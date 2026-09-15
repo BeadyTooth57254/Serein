@@ -230,7 +230,7 @@ bash scripts/one_click.sh
 
 直接访问 IP 时，将 `https://你的域名` 换成实际入口，如 `http://公网IP:网关端口`。MCP 与聊天 API 共用同一个 Gateway Key，可从安装完成的终端输出、`deploy/connection-guide.txt` 或 `deploy/secrets/api-token` 读取；主菜单 6 是更换 Key，查看现有 Key 无需更换。模型厂商的 API Key 仅填在 **设置 → 模型**，不要填到连接 Serein 的客户端中。网页 **使用说明 → 接入** 提供公网 IP 和域名的连接地址模板及填写方法。
 
-新窗口需要独立的 `X-Serein-Window-ID`；未填写时使用默认会话，共用召回冷却。开启开窗续接后，在经过网关的聊天中发送 `/resume`，也可以在指令后接上想聊的话。[模型与客户端配置](docs/model-settings.md)
+新窗口需要独立的 `X-Serein-Window-ID`；未填写时使用默认会话，共用召回冷却。开启开窗续接后，可自选带入最近 1–50 条原话；“最近原话”和“尚未整理的原话”互斥，打开一个会关闭另一个。在经过网关的聊天中发送 `/resume`，也可以在指令后接上想聊的话。[模型与客户端配置](docs/model-settings.md)
 
 ### 导入、备份与升级
 

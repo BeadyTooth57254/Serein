@@ -103,3 +103,25 @@ def test_picker_filters_pagination_and_explicit_selection_survives_reload(settin
     save_settings(settings.database,{'resume':{'selected_memories':False}})
     assert resume('new')['items']==[]
     assert read_settings(settings.database)['resume']['selected_ids']==['pick-scene','pick-00']
+
+
+def test_resume_can_include_a_bounded_number_of_recent_originals(settings):
+    entries=[{'source_event_id':str(index),'session_id':'recent-chat','role':'user' if index%2 else 'assistant',
+              'text':f'Original {index}','created_at':f'2026-09-15T00:0{index}:00Z'} for index in range(1,6)]
+    raw_archive(settings).ingest(entries,source='synthetic')
+    save_settings(settings.database,{'features':{'resume':True},'resume':{
+        'latest_shadow':False,'recent_events':False,'favorite_scenes':False,'selected_memories':False,
+        'pending_originals':False,'recent_originals':True,'recent_original_limit':3}})
+    resume=Application(settings).contributions.tools['resume']
+    result=resume('new')
+    originals=[item for item in result['items'] if item['section']=='recent_original']
+    assert [item['body_md'] for item in originals]==['Original 3','Original 4','Original 5']
+    assert result['total_recent_originals']==3
+    assert result['raw_message_ids']==[item['raw_id'] for item in originals]
+    scoped=resume('new',source_session_id='missing-chat')
+    assert scoped['items']==[] and scoped['total_recent_originals']==0
+    save_settings(settings.database,{'resume':{'pending_originals':True}})
+    pending=resume('new')
+    assert pending['selection']['pending_originals'] is True
+    assert pending['selection']['recent_originals'] is False
+    assert len([item for item in pending['items'] if item['kind']=='raw'])==5

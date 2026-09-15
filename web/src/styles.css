@@ -7262,6 +7262,8 @@ label:has(input:focus-visible) {
 @media(max-width:600px) { .resume-picker { padding:18px; } .resume-picker-filters,.resume-picker footer { flex-wrap:wrap; } .resume-picker-filters input[type=search] { flex-basis:100%; } }
 
 .resume-custom-choice { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; }
+.resume-selection .resume-original-count { display:flex; align-items:center; gap:8px; padding:0; color:var(--muted); font-size:13px; }
+.resume-original-count input { width:76px; height:34px; border:1px solid var(--line); border-radius:7px; padding:0 8px; background:var(--paper); color:var(--ink); }
 .resume-picker-trigger { padding:5px 13px; border:1px solid #e0e8e2; border-radius:999px; background:#edf2ee; color:#50665a; font:inherit; font-size:13px; line-height:1.5; cursor:pointer; transition:background .18s ease; }
 .resume-picker-trigger:hover { background:#e2ebe5; }
 .resume-picker-trigger:focus-visible { outline:2px solid #7e9988; outline-offset:3px; }

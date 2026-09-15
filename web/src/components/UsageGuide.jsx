@@ -142,7 +142,7 @@ export function UsageGuide({ onOpenSettingsTab, initialPage }) {
       <p>网页登录用安装时设置的用户名、密码；模型厂商的 API Key 填在<SettingsLink tab="models" onOpen={onOpenSettingsTab}>模型页</SettingsLink>。客户端连接 Serein 时填 Gateway Key。主菜单 <code>6</code> 会更换 Key，旧 Key 随即失效，所有聊天和 MCP 客户端都要更新；查看现有 Key 无需更换。密钥和连接说明请勿公开。</p>
       <h4>聊天窗口与开窗续接</h4>
       <p>在客户端添加请求头：名称填 <code>X-Serein-Window-ID</code>，值填当前会话的独立标识，例如 <code>chat-001</code>。同一会话保持不变，新建会话换一个值；若客户端支持会话 ID 变量，可使用它。</p>
-      <p>不填请求头也能使用，会统一进入默认会话 <code>main</code>，共用提醒轮次和召回冷却，无法据此识别新窗口。固定写一个值也不会自动区分窗口。启用开窗续接后，在聊天中发送 <code>/resume</code>，也可以在指令后写上想继续聊的话；Serein 会读取完整的接续资料。</p>
+      <p>不填请求头也能使用，会统一进入默认会话 <code>main</code>，共用提醒轮次和召回冷却，无法据此识别新窗口。固定写一个值也不会自动区分窗口。启用开窗续接后，可在功能设置里选择带入最近 1–50 条原话；“最近原话”和“尚未整理的原话”只能开启一个，打开一个会自动关闭另一个。在聊天中发送 <code>/resume</code>，也可以在指令后写上想继续聊的话，Serein 会读取完整的接续资料。</p>
       <p>仅连接 MCP 不会处理 <code>/resume</code>；聊天也要经过本实例网关。</p>
       <h4>已有聊天宿主：用 Hook 找前情</h4>
       <p>如果模型调用由你自己的服务或 Agent 管理，先在<SettingsLink tab="configuration" onOpen={onOpenSettingsTab}>配置页</SettingsLink>建立 / 补齐检索索引。宿主在新的用户轮用 Gateway Key 请求 <code>POST /api/hook/recall</code>，把返回的 <code>additional_context</code> 实际放进模型输入；返回的 <code>recalled_ids</code> 只是备选，<code>injected: false</code> 表示 Serein 尚未替宿主注入。</p>

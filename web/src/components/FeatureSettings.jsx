@@ -29,7 +29,7 @@ export function FeatureSettings({onOpenSummary,onOpenEventGuide}) {
   }
   return <section className="settings-group"><div className="settings-group__heading"><h3>可选功能</h3><p>按需开启，保存后生效。</p></div>
     {values&&<form onSubmit={save}>
-      <div className="settings-toggle"><span><strong id="automatic-summary-label">自动摘要</strong><small>自动把新聊天归线、整理为 Event，会按待处理材料调用模型；关闭后保留配置和进度，仍可手动继续。</small>
+      <div className="settings-toggle"><span><strong id="automatic-summary-label">自动摘要</strong><small>自动把新聊天归线、整理为 Event，会按待处理材料调用模型；每次从关闭改为开启时，从保存后的新原话开始，不补跑此前积压。</small>
         <button type="button" className="settings-link" onClick={onOpenSummary}>自动摘要配置</button>{' · '}
         <button type="button" className="settings-link" onClick={onOpenEventGuide}>了解模型调用与费用</button></span>
         <input type="checkbox" role="switch" aria-labelledby="automatic-summary-label" disabled={busy} checked={autoEnabled} onChange={event=>setAutoEnabled(event.target.checked)}/></div>
@@ -37,10 +37,12 @@ export function FeatureSettings({onOpenSummary,onOpenEventGuide}) {
       <span><strong>{label}</strong><small>{help}</small></span><input type="checkbox" role="switch" aria-label={label} disabled={busy} checked={!!values[key]}
         onChange={event=>setValues(current=>({...current,[key]:event.target.checked}))}/></label>)}
       {values.resume&&<fieldset className="resume-selection"><legend>每次开窗读取</legend>
-        <p>只读最新一份窗影；事件和 Scene 附记忆 ID，可用 read_memory 继续阅读绑定的原文。Event 和 Scene 都可以收藏；这里的收藏续接选项仍只读取 Scene，也可以单独选择事件。</p>
-        {Object.entries({latest_shadow:'最新窗影',recent_events:'最近 10 条事件（含记忆 ID）',favorite_scenes:'舍不得丢的 Scene',selected_memories:'自选事件 / Scene',pending_originals:'尚未整理的原话'}).map(([key,label])=>
-          <div key={key} className={key==='selected_memories'?'resume-custom-choice':undefined}><label><input type="checkbox" checked={!!selection[key]} disabled={busy} onChange={event=>setSelection(current=>({...current,[key]:event.target.checked}))}/><span>{label}</span></label>
+        <p>只读最新一份窗影；事件和 Scene 附记忆 ID，可用 read_memory 继续阅读绑定的原文。Event 和 Scene 都可以收藏；这里的收藏续接选项仍只读取 Scene，也可以单独选择事件。“最近原话”和“尚未整理的原话”只能开启一个。</p>
+        {Object.entries({latest_shadow:'最新窗影',recent_events:'最近 10 条事件（含记忆 ID）',favorite_scenes:'舍不得丢的 Scene',selected_memories:'自选事件 / Scene',recent_originals:'最近原话',pending_originals:'尚未整理的原话'}).map(([key,label])=>
+          <div key={key} className={key==='selected_memories'||key==='recent_originals'?'resume-custom-choice':undefined}><label><input type="checkbox" checked={!!selection[key]} disabled={busy} onChange={event=>setSelection(current=>({...current,[key]:event.target.checked,
+            ...(event.target.checked&&key==='recent_originals'?{pending_originals:false}:event.target.checked&&key==='pending_originals'?{recent_originals:false}:{})}))}/><span>{label}</span></label>
             {key==='selected_memories'&&<ResumeMemoryPicker ids={selection.selected_ids||[]} disabled={busy} onChange={ids=>setSelection(current=>({...current,selected_ids:ids,selected_memories:ids.length>0}))}/>}
+            {key==='recent_originals'&&<label className="resume-original-count"><span>带入</span><input type="number" min="1" max="50" required disabled={busy||!selection.recent_originals} value={selection.recent_original_limit||20} onChange={event=>setSelection(current=>({...current,recent_original_limit:Number(event.target.value)}))}/><span>条</span></label>}
           </div>)}
         {!values.window_shadows&&selection.latest_shadow&&<small>读取窗影还需开启上方的“窗影”功能。</small>}
       </fieldset>}
