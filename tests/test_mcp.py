@@ -267,6 +267,33 @@ def test_promotion_optional_allowlist_can_start_disabled(tmp_path, selected):
     asyncio.run(exercise())
 
 
+@pytest.mark.parametrize('selected', [False, True])
+def test_index_sync_is_opt_in_and_respects_allowlist(tmp_path, selected):
+    from serein.deployment import save_settings
+    database = tmp_path/'index-sync-allowlist.db'
+    with Store(database):
+        pass
+    server = create_server(Application(Settings(database, writable=True,
+        mcp_tools=['read_memory', *(['index_sync'] if selected else [])])))
+
+    async def exercise():
+        assert {t.name for t in await server.list_tools()} == {'read_memory'}
+        with pytest.raises(Exception, match='Unknown tool'):
+            await server.call_tool('index_sync', {})
+        save_settings(database, {'features':{'index_sync_tool':True}})
+        names = {t.name for t in await server.list_tools()}
+        assert ('index_sync' in names) is selected
+        if selected:
+            result = (await server.call_tool('index_sync', {}))[1]
+            assert result == {'status':'current', 'updated':0}
+        save_settings(database, {'features':{'index_sync_tool':False}})
+        assert {t.name for t in await server.list_tools()} == {'read_memory'}
+        with pytest.raises(Exception, match='Unknown tool'):
+            await server.call_tool('index_sync', {})
+
+    asyncio.run(exercise())
+
+
 @pytest.mark.parametrize('configured,method', [(False,'lexical'), (True,'semantic')])
 def test_mcp_omitted_recall_arguments_follow_provider_configuration(tmp_path, configured, method, monkeypatch):
     monkeypatch.setenv('SEREIN_SNAPSHOT_ID', 'test-snapshot')

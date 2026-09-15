@@ -107,7 +107,7 @@ class Services:
             published = result.get('document') or result
             index_status = self.sync_index(document_ids=[published['id']] if published.get('id') else [])
         except (OSError, ValueError, sqlite3.Error):
-            index_status = {"status": "pending", "note": "Canonical write succeeded; retry index_sync."}
+            index_status = {"status": "pending", "note": "Canonical write succeeded; index update remains pending."}
         response = {**result, "index": index_status}
         if action == 'save' and result.get('kind') == 'scene' and not request.get('document_id'):
             # A hint is never part of the canonical write or its retry receipt.
@@ -164,7 +164,7 @@ class Application:
         })
         if settings.writable:
             self.contributions.tools.update(memory_write=self.services.write, memory_candidates=self.services.candidates,
-                                            memory_recall=self.services.recall, index_sync=self.services.sync_index)
+                                            memory_recall=self.services.recall)
             from .extensions.pipeline import tools_for
             self.contributions.tools.update(tools_for(settings))
         if self.services.source is not None:

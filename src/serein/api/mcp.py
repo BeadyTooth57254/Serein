@@ -168,10 +168,6 @@ def create_server(app: Application, *, private=False, http=False):
             """Read the review queue. Pending proposals are not searchable memories."""
             return services.candidates(status=status, limit=limit)
 
-        def index_sync() -> dict[str, Any]:
-            """Retry pending index updates after a successful canonical write; changed vectors await compatible regeneration."""
-            return services.sync_index()
-
         def write_diary(operation_id: str, kind: Literal["diary", "darkroom"], author: Literal["ai", "user"],
                          day: str, body_md: str, title: str | None = None, entry_id: int | None = None,
                          expected_revision: int | None = None, unlock_at: str | None = None) -> dict[str, Any]:
@@ -188,7 +184,7 @@ def create_server(app: Application, *, private=False, http=False):
             """Explicitly soft-delete a notebook entry, preserving history and hiding content/comments from normal reads."""
             return services.write(operation_id, "diary_delete", {"entry_id": entry_id, "expected_revision": expected_revision})
 
-        for fn in (write_scene, edit_scene, propose_memory, review_memory, index_sync, write_diary, comment_diary):
+        for fn in (write_scene, edit_scene, propose_memory, review_memory, write_diary, comment_diary):
             server.add_tool(fn, annotations=write)
             registered.add(fn.__name__)
         for fn in (set_memory_state, delete_diary):
@@ -220,7 +216,7 @@ def create_server(app: Application, *, private=False, http=False):
     # Keep internal/UI implementations available without exposing retired MCP tools.
     internal_tools = {'resume', 'window_shadow_read', 'list_source_messages', 'read_source_messages',
                       'handoff', 'narrative_revision_inbox', 'review_narrative_revision', 'publish_narrative'}
-    builtins = internal_tools | {"memory_read", "memory_materials", "memory_search", "memory_write", "memory_candidates", "memory_recall", "index_sync", "source_messages", "source_read"}
+    builtins = internal_tools | {"memory_read", "memory_materials", "memory_search", "memory_write", "memory_candidates", "memory_recall", "source_messages", "source_read"}
     for name, function in app.contributions.tools.items():
         if private and name in {'pipeline_next','pipeline_submit',*app._optional_names}:
             continue
@@ -238,7 +234,7 @@ def create_server(app: Application, *, private=False, http=False):
         if not private and 'save_memory' in selected:
             selected.remove('save_memory')
             selected.update({'write_scene', 'edit_scene'})
-        optional_catalog = internal_tools | {'memo_create','memo_list','memo_update','window_shadow_write','source_message_search','source_message_read','narrative_volume','read_favorites','promote_event_to_scene'}
+        optional_catalog = internal_tools | {'memo_create','memo_list','memo_update','window_shadow_write','source_message_search','source_message_read','narrative_volume','read_favorites','promote_event_to_scene','index_sync'}
         if selected - available - optional_catalog:
             raise ValueError('Selected MCP tools are unavailable: '+', '.join(sorted(selected-available-optional_catalog)))
         for name in available-selected:

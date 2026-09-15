@@ -65,6 +65,39 @@ def test_event_scene_switch_persists_and_refreshes_http_mcp(tmp_path, writable):
         assert services.read(event['id'])['document']['body_md'] == 'A trip'
 
 
+def test_index_sync_switch_refreshes_http_and_mcp(tmp_path):
+    database = tmp_path/'index-sync.db'
+    with Store(database):
+        pass
+    settings = Settings(database, writable=True)
+    headers = {'Authorization':'Bearer test', 'Accept':'application/json, text/event-stream'}
+    with TestClient(create_app(settings, token='test', live=True), headers=headers) as client:
+        def rpc(method, params=None):
+            response = client.post('/serein/mcp', json={'jsonrpc':'2.0', 'id':1, 'method':method,
+                                                        'params':params or {}})
+            assert response.status_code == 200, response.text
+            return response.json()['result']
+
+        def names():
+            return {tool['name'] for tool in rpc('tools/list')['tools']}
+
+        def call():
+            return rpc('tools/call', {'name':'index_sync', 'arguments':{}})
+
+        assert 'index_sync' not in names()
+        assert call()['isError']
+        assert client.post('/v1/extensions/index_sync', json={}).status_code == 404
+        response = client.patch('/v1/settings', json={'features':{'index_sync_tool':True}})
+        assert response.status_code == 200, response.text
+        assert 'index_sync' in names()
+        assert call()['structuredContent'] == {'status':'current', 'updated':0}
+        assert client.post('/v1/extensions/index_sync', json={}).json() == {'status':'current', 'updated':0}
+        assert client.patch('/v1/settings', json={'features':{'index_sync_tool':False}}).status_code == 200
+        assert call()['isError']
+        assert client.post('/v1/extensions/index_sync', json={}).status_code == 404
+        assert 'index_sync' not in names()
+
+
 @pytest.mark.parametrize('writable', [False, True])
 @pytest.mark.parametrize('entry_path', ['/serein/mcp', '/mcp'])
 def test_http_mcp_auth_tools_and_single_lifecycle(tmp_path, monkeypatch, writable, entry_path):

@@ -31,6 +31,13 @@ def tools_for(settings):
                      source_message_read=originals.source_message_read)
     if not settings.writable:
         return tools
+    if enabled['index_sync_tool']:
+        def index_sync() -> dict[str, Any]:
+            """Retry pending index updates after a successful canonical write; changed vectors await compatible regeneration."""
+            from ..application import Services
+            return Services(settings).sync_index()
+
+        tools['index_sync'] = index_sync
     if enabled['event_to_scene']:
         def promote_event_to_scene(operation_id: str, event_id: str, expected_revision: int,
                                    title: str, body_md: str) -> dict[str, Any]:

@@ -11,7 +11,7 @@ from .core.store import Store, encode, Conflict
 DEFAULT_IDENTITY = {'user_name': 'User', 'ai_name': 'AI'}
 DEFAULT_UPSTREAM = {'base_url': '', 'model': '', 'writer_model': '', 'api_key': '',
                     'writer_enabled': False, 'memory_enabled': False, 'operit_enabled': True}
-DEFAULT_FEATURES = {'memos':False, 'persona':False, 'anti_retreat':False, 'window_shadows':False, 'association':False, 'write_context':False, 'relations_auto_accept':False, 'resume':False, 'originals':False, 'favorites':False, 'narrative_tools':False, 'event_to_scene':False}
+DEFAULT_FEATURES = {'memos':False, 'persona':False, 'anti_retreat':False, 'window_shadows':False, 'association':False, 'write_context':False, 'relations_auto_accept':False, 'resume':False, 'originals':False, 'favorites':False, 'narrative_tools':False, 'event_to_scene':False, 'index_sync_tool':False}
 DEFAULT_RESUME = {'latest_shadow':True, 'recent_events':True, 'favorite_scenes':True, 'selected_memories':False, 'selected_ids':[], 'pending_originals':True}
 DEFAULT_DOMAINS = [
     {'key':'relationship','label':'关系','description':'身份、称呼、承诺、边界与沟通方式','policy':'normal'},

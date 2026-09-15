@@ -6,7 +6,7 @@ from starlette.concurrency import run_in_threadpool
 def routes(application, auth):
     router = APIRouter(dependencies=auth)
     builtins = {'memory_read','memory_materials','memory_search','memory_write','memory_candidates',
-                'memory_recall','index_sync','source_messages','source_read'}
+                'memory_recall','source_messages','source_read'}
 
     @router.post('/v1/extensions/{name}')
     async def call(name: str, arguments: dict):
