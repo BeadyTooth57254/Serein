@@ -1,11 +1,16 @@
 """Model registry transport shared by chat and optional authoring tasks."""
+from copy import deepcopy
 import json
+import logging
 import time
 from types import SimpleNamespace
 from urllib.parse import urlsplit
 import httpx
 from .chat_context import ClientContext
 from .deployment import task_model
+
+
+logger = logging.getLogger(__name__)
 
 
 class UpstreamError(ValueError):
@@ -27,9 +32,39 @@ def non_thinking_options(model):
     return {'thinking': {'type': 'disabled'}} if deepseek else {}
 
 
+def deepseek_tool_reasoning_compat(model, payload, *, window_id=''):
+    """Add DeepSeek's required field when an OpenAI-compatible client dropped it."""
+    if str(model.get('protocol') or 'openai') != 'openai':
+        return payload, 0
+    identity = ' '.join((str(model.get('model') or ''), str(model.get('base_url') or ''))).lower()
+    if 'deepseek' not in identity or not isinstance(payload.get('tools'), list) or not payload['tools']:
+        return payload, 0
+    messages = payload.get('messages')
+    if not isinstance(messages, list):
+        return payload, 0
+    patched = None
+    count = 0
+    for index, message in enumerate(messages):
+        if not isinstance(message, dict) or message.get('role') != 'assistant':
+            continue
+        if 'reasoning_content' in message and message['reasoning_content'] is not None:
+            continue
+        if patched is None:
+            patched = deepcopy(messages)
+        patched[index]['reasoning_content'] = ''
+        count += 1
+    if patched is None:
+        return payload, 0
+    result = {**payload, 'messages': patched}
+    logger.info('Gateway added empty DeepSeek reasoning_content fallback | window=%s messages=%s',
+                window_id or 'main', count)
+    return result, count
+
+
 def request_for(model, payload, *, window_id=''):
     adapter = ClientContext()
     payload = {**payload, 'model': model['model']}
+    payload, _ = deepseek_tool_reasoning_compat(model, payload, window_id=window_id)
     if model.get('protocol') == 'anthropic':
         if isinstance(payload.get('thinking'), dict):
             payload['_serein_anthropic_thinking'] = payload['thinking']

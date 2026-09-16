@@ -502,6 +502,32 @@ def test_native_task_options_and_cache_validation(deployment):
     with pytest.raises(ValueError):ModelEntry(**model,prompt_cache='anthropic',prompt_cache_retention='24h')
 
 
+def test_deepseek_tool_requests_fill_only_missing_reasoning_content_without_mutating_input():
+    from serein.model_runtime import deepseek_tool_reasoning_compat, request_for
+    model={'model':'deepseek-ai/DeepSeek-V4-Flash','base_url':'https://api.siliconflow.cn/v1','protocol':'openai'}
+    payload={'tools':[{'type':'function','function':{'name':'lookup'}}], 'messages':[
+        {'role':'user','content':'question'},
+        {'role':'assistant','content':'first answer'},
+        {'role':'assistant','content':None,'reasoning_content':None,'tool_calls':[{'id':'a'}]},
+        {'role':'assistant','content':'kept','reasoning_content':'actual reasoning'},
+        {'role':'tool','tool_call_id':'a','content':'result'},
+    ]}
+    patched,count=deepseek_tool_reasoning_compat(model,payload,window_id='operit-window')
+    assert count==2
+    assert [message.get('reasoning_content') for message in patched['messages'] if message.get('role')=='assistant']==[
+        '', '', 'actual reasoning']
+    assert 'reasoning_content' not in payload['messages'][1]
+    assert payload['messages'][2]['reasoning_content'] is None
+    unchanged,count=deepseek_tool_reasoning_compat(
+        {'model':'ordinary','base_url':'https://provider.example/v1','protocol':'openai'},payload)
+    assert unchanged is payload and count==0
+    unchanged,count=deepseek_tool_reasoning_compat(model,{**payload,'tools':[]})
+    assert count==0 and unchanged['messages'] is payload['messages']
+    _,_,forwarded=request_for({**model,'api_key':'synthetic'},payload,window_id='operit-window')
+    assert [message.get('reasoning_content') for message in forwarded['messages'] if message.get('role')=='assistant']==[
+        '', '', 'actual reasoning']
+
+
 @pytest.mark.parametrize('model,expected',[
     ({'model':'deepseek-chat','base_url':'https://api.deepseek.com/v1','protocol':'openai'},
      {'thinking':{'type':'disabled'}}),
