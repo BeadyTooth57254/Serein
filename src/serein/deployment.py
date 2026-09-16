@@ -12,7 +12,7 @@ from .core.store import Store, encode, Conflict, now
 DEFAULT_IDENTITY = {'user_name': 'User', 'ai_name': 'AI'}
 DEFAULT_UPSTREAM = {'base_url': '', 'model': '', 'writer_model': '', 'api_key': '',
                     'writer_enabled': False, 'memory_enabled': False, 'operit_enabled': True}
-DEFAULT_FEATURES = {'memos':False, 'persona':False, 'anti_retreat':False, 'window_shadows':False, 'association':False, 'write_context':False, 'relations_auto_accept':False, 'resume':False, 'originals':False, 'favorites':False, 'narrative_tools':False, 'event_to_scene':False, 'current_time':False}
+DEFAULT_FEATURES = {'memos':False, 'persona':False, 'anti_retreat':False, 'window_shadows':False, 'association':False, 'write_context':False, 'relations_auto_accept':False, 'resume':False, 'originals':False, 'favorites':False, 'narrative_tools':False, 'event_to_scene':False, 'current_time':False, 'image_transcription':False}
 DEFAULT_CLOCK = {'timezone':'Asia/Shanghai'}
 DEFAULT_RESUME = {'latest_shadow':True, 'recent_events':True, 'favorite_scenes':True, 'selected_memories':False, 'selected_ids':[],
                   'recent_originals':False, 'recent_original_limit':20, 'pending_originals':True}
@@ -26,7 +26,7 @@ DEFAULT_DOMAINS = [
     {'key':'general','label':'通用','description':'其他无法归入上述主域的经历','policy':'normal'},
 ]
 TASKS = ('chat', 'writer', 'embedding', 'reranker', 'relations', 'dreams', 'narrative_scout', 'event_pipeline',
-         'persona', 'anti_retreat', 'track_router', 'event_curator', 'event_writer', 'operit_tagging', 'arc_linker')
+         'persona', 'anti_retreat', 'track_router', 'image_transcription', 'event_curator', 'event_writer', 'operit_tagging', 'arc_linker')
 
 
 def read_from_store(store):
@@ -172,6 +172,8 @@ def save_settings(database, changes):
             raise ValueError('Models in an upstream need distinct aliases; upstream names must distinguish their models')
         if any(value and value not in known for value in current['assignments'].values()):
             raise ValueError('A selected model is missing; clear its task assignment before removing it')
+        if current['features']['image_transcription'] and not current['assignments'].get('image_transcription'):
+            raise ValueError('开启聊天图片转录前，请先选择“图片转录”模型')
         mode=current['pipeline']['execution_mode']
         if mode not in ('legacy','api','agent'):raise ValueError('Unknown Event execution mode')
         if mode=='api':

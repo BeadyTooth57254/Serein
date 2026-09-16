@@ -3,6 +3,7 @@ import {ResumeMemoryPicker} from './ResumeMemoryPicker.jsx';
 import {instanceSettings} from '../storage/instanceStore.js';
 
 const features = {
+  image_transcription:['聊天图片先转录','收到图片后先用“图片转录”模型读取可见文字，保存到原始消息的专用字段，再把转录和原消息一起交给聊天模型。默认关闭；需先在“配置”页选择图片转录模型。'],
   current_time:['当前日期时间','每个新用户轮次向聊天主模型注入所选时区的日期和时间；工具续轮沿用该轮时间。只保证当轮请求能看到时间，Serein 无法修改客户端已落盘的消息记录。'],
   memos:['备忘','留给未来的话。到期时带入聊天；关闭后不注册备忘工具。'],
   persona:['心绪','记录并延续对话状态。请在“配置”页选择“心绪/防撤退”使用的模型。'],

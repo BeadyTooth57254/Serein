@@ -133,13 +133,26 @@ class RawEventStore:
                 session_id TEXT NOT NULL DEFAULT '',
                 client TEXT NOT NULL DEFAULT '',
                 metadata_json TEXT NOT NULL DEFAULT '{}',
+                image_transcription_status TEXT NOT NULL DEFAULT '',
+                image_transcription_json TEXT,
+                image_transcription_updated_at TEXT,
                 UNIQUE(source, event_hash)
             )
             """
         )
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(raw_events)")}
+        for name, declaration in (
+            ("image_transcription_status", "TEXT NOT NULL DEFAULT ''"),
+            ("image_transcription_json", "TEXT"),
+            ("image_transcription_updated_at", "TEXT"),
+        ):
+            if name not in columns:
+                conn.execute(f"ALTER TABLE raw_events ADD COLUMN {name} {declaration}")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_raw_events_created ON raw_events(created_at DESC, id DESC)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_raw_events_source ON raw_events(source, created_at DESC)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_raw_events_role ON raw_events(role, created_at DESC)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_raw_events_image_transcription "
+                     "ON raw_events(image_transcription_status) WHERE image_transcription_status != ''")
         conn.execute(
             """
             CREATE UNIQUE INDEX IF NOT EXISTS idx_raw_events_source_event_id
@@ -160,6 +173,32 @@ class RawEventStore:
             logger.warning("raw_events FTS5 disabled: %s", exc)
         conn.commit()
         conn.close()
+
+    def get_event(self, row_id: int) -> dict[str, Any] | None:
+        conn = self._connect()
+        try:
+            row = conn.execute("SELECT * FROM raw_events WHERE id = ?", (int(row_id),)).fetchone()
+            return self._row_to_event(row) if row else None
+        finally:
+            conn.close()
+
+    def update_image_transcription(self, row_id: int, status: str,
+                                   payload: dict[str, Any] | None = None) -> None:
+        if status not in {"pending", "complete", "failed"}:
+            raise ValueError("Unknown image transcription status")
+        encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True) if payload is not None else None
+        conn = self._connect()
+        try:
+            cursor = conn.execute(
+                "UPDATE raw_events SET image_transcription_status=?, image_transcription_json=?, "
+                "image_transcription_updated_at=? WHERE id=?",
+                (status, encoded, self._now_iso(), int(row_id)),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError("Unknown raw event")
+            conn.commit()
+        finally:
+            conn.close()
 
     def ingest(self, events: list[dict[str, Any]], *, source: str = "") -> dict[str, Any]:
         safe_source = self._clean_source(source)
@@ -480,6 +519,11 @@ class RawEventStore:
             metadata = json.loads(row["metadata_json"] or "{}")
         except Exception:
             metadata = {}
+        transcription = None
+        try:
+            transcription = json.loads(row["image_transcription_json"]) if row["image_transcription_json"] else None
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+            transcription = None
         return {
             "id": row["id"],
             "source": row["source"],
@@ -492,6 +536,9 @@ class RawEventStore:
             "session_id": row["session_id"],
             "client": row["client"],
             "metadata": metadata,
+            "image_transcription_status": row["image_transcription_status"],
+            "image_transcription": transcription,
+            "image_transcription_updated_at": row["image_transcription_updated_at"],
         }
 
     def _search_filters(

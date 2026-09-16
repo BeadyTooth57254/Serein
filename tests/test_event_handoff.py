@@ -52,13 +52,13 @@ def test_three_stage_image_chain_preserves_bytes_transcription_and_raw_sources(s
             p.submit(settings.database,result['job_id'],output)
             result=asyncio.run(p.advance(settings.database,include_recent=True))
     assert result['events']==1 and result['processed_originals']==2
-    assert seen==list(p.ROLES)
+    assert seen==list(p.ROLES)+(['event_writer'] if mode=='api' else [])
     with Store(settings.database,read_only=True) as store:
         details=json.loads(store.conn.execute('SELECT details_json FROM pipeline_event_details').fetchone()[0])
         assert 'evidence' not in details and details['curator_image_transcriptions'][0]['sha256']==sha
         if mode=='api':
-            assert len(details['writer']['event_draft'])==1200
-            assert store.conn.execute("SELECT count(*) FROM pipeline_attempts WHERE job_id LIKE '%:event_writer:%'").fetchone()[0]==1
+            assert details['writer']['event_draft']=='We agreed to The book title'
+            assert store.conn.execute("SELECT count(*) FROM pipeline_attempts WHERE job_id LIKE '%:event_writer:%'").fetchone()[0]==2
         assert PNG in store.conn.execute('SELECT metadata_json FROM raw_events WHERE id=1').fetchone()[0]
         refs=[dict(r) for r in store.conn.execute('SELECT * FROM fact_event_sources ORDER BY id')]
         assert [r['message_id'] for r in refs]==['image','reply']

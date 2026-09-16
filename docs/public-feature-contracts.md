@@ -70,7 +70,9 @@ Scene 和日记的新建调用会独立创建内容；内部随机操作编号�
 
 ## 开关与名字
 
-`features.current_time`、`memos`、`persona`、`anti_retreat`、`window_shadows`、`association`、`write_context`、`relations_auto_accept`、`resume`、`originals`、`favorites`、`narrative_tools`、`event_to_scene` 默认 false，写入实例数据库。备忘的界面名称统一为“备忘”，描述为“留给未来的话”。保存后后续请求直接读取，停止调用或注入而不清空原有记录。自动摘要另由 `pipeline.auto_enabled` 控制；梦境由模型选择、每日概率和 Prompt 配置控制，不属于这组布尔开关。
+`features.current_time`、`image_transcription`、`memos`、`persona`、`anti_retreat`、`window_shadows`、`association`、`write_context`、`relations_auto_accept`、`resume`、`originals`、`favorites`、`narrative_tools`、`event_to_scene` 默认 false，写入实例数据库。备忘的界面名称统一为“备忘”，描述为“留给未来的话”。保存后后续请求直接读取，停止调用或注入而不清空原有记录。自动摘要另由 `pipeline.auto_enabled` 控制；梦境由模型选择、每日概率和 Prompt 配置控制，不属于这组布尔开关。
+
+“聊天图片先转录”（`features.image_transcription`）只作用于经过 Serein 聊天网关的新图片消息。开启前必须选择 `assignments.image_transcription`。网关先把用户原话和附件幂等写入 `raw_events`，冻结并校验图片字节，再调用所选模型；成功结果写入同一原话行的专用状态、JSON 和更新时间列，并作为明确标注的来源材料与原消息一起交给主聊天模型。图片内文字不作为系统指令。相同原话、图序和 SHA-256 的完成结果直接复用；失败会写入 failed 状态并在调用主模型前返回错误，不静默绕过。关闭开关不删除已有转录，自动摘要仍可复用已完成且字节匹配的结果。
 
 “联想”（`features.association`）是独立开关，位于设置 → 功能；保存后下一次召回生效，无需重启或重建索引。关闭时只走直接召回，不查询关系边或返回召回关联诊断列表，保留已有关系及其管理功能。直接候选前 6 条向量结果保底，第 7–20 条须达到已保存的整篇／片段门槛（默认 0.50）、cue 语义门槛（默认 0.55）、Event 特定关键词或带回忆意图的完整实体名之一；扩展信号各最多 3 条，只取得 reranker 资格，不加分。开启联想后，从直接 Scene 候选的已确认关系中最多再补一条 Scene，共用一次 reranker，仍须达到已保存的最终门槛（默认 0.65），最多两卡，选卡后冷却且不补位。三个门槛保存后下一轮生效，无需重建向量；旧客户端只保存最终门槛时保留另外两项。联想不自动开启“关系提案自动通过”，自动通过也不自动开启联想；旧实例缺少此字段按关闭处理。
 

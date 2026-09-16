@@ -98,6 +98,7 @@
   "src/serein/chat_archive.py",
   "src/serein/chat_context.py",
   "src/serein/chat_features.py",
+  "src/serein/image_transcription.py",
   "src/serein/chat_observation.py",
   "src/serein/chat_resume.py",
   "src/serein/chat_state.py",

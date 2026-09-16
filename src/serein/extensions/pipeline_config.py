@@ -18,7 +18,7 @@ def load(database):
     catalog={item['id']:item for item in configured_models(settings)}
     return {'revision':settings['settings_version'],'identity':settings['identity'],
             'policy':settings['pipeline'],'models':{role:catalog.get(settings['assignments'].get(role))
-                for role in ('track_router','event_curator','event_writer')}}
+                for role in ('track_router','image_transcription','event_curator','event_writer')}}
 
 
 def snapshot(database, batch_id):

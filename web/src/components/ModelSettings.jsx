@@ -7,7 +7,7 @@ import {RecallThresholdSettings} from './RecallThresholdSettings.jsx';
 
 const tasks = {writer:"Narrative Writer",embedding:"Embedding",reranker:"Reranker",
   relations:"Scene 关系",dreams:"梦境",narrative_scout:"叙事卷找材料",persona:"心绪/防撤退",
-  track_router:"原话 · 归线",event_curator:"原话 · 切分与转录",event_writer:"原话 · Event 写作",operit_tagging:"打标",arc_linker:"Event · Arc 归档"};
+  track_router:"原话 · 归线",image_transcription:"图片转录（聊天 / 自动摘要）",event_curator:"原话 · 切分",event_writer:"原话 · Event 写作",operit_tagging:"打标",arc_linker:"Event · Arc 归档"};
 
 export function ModelSettings({page,summaryRequest=0,onOpenPipeline,onOpenCatalog,onOpenAssignments,
   recallThreshold,setRecallThreshold,candidateThresholdDraft,setCandidateThresholdDraft,
@@ -134,7 +134,7 @@ export function ModelSettings({page,summaryRequest=0,onOpenPipeline,onOpenCatalo
       <p>自动摘要可能有遗漏或误解，重要内容请对照原始对话核对。</p>
       <label className="settings-field"><span>自动 Event 执行方式</span><select value={config.pipeline.execution_mode||'legacy'} onChange={event=>setConfig(current=>({...current,pipeline:{...current.pipeline,execution_mode:event.target.value}}))}>
         {(!config.pipeline.execution_mode||config.pipeline.execution_mode==='legacy')&&<option value="legacy">沿用旧配置（各阶段分别执行）</option>}<option value="api">API</option><option value="agent">Agent</option></select></label>
-      <p>{config.pipeline.execution_mode==='agent'?'通过已认证的 Agent 执行器领取任务。三阶段模型选择作为执行提示，执行器需按提示使用相应模型；仅切换此选项不会启动本机 CLI。':'在本页为归线、切分与转录、Event 写作分别选模型。切分与 Writer 所选 API 需支持图片和 JSON 输出。'}</p>
+      <p>{config.pipeline.execution_mode==='agent'?'通过已认证的 Agent 执行器领取任务。阶段模型选择作为执行提示，执行器需按提示使用相应模型；仅切换此选项不会启动本机 CLI。':'在本页为归线、图片转录、切分、Event 写作分别选模型。选择独立图片转录模型后，切分器读取已落库的转录；不选择则仍由切分器直接读图。图片转录与 Writer 所选 API 需支持图片和 JSON 输出。'}</p>
       {Object.entries({max_input_chars:['每批原话字符上限',2000,100000],max_prompt_chars:['完整提示词字符上限',8000,200000],timeout_seconds:['模型读取超时（秒）',30,1800]}).map(([key,[label,min,max]])=>
         <label className="settings-field" key={key}><span>{label}</span><input type="number" min={min} max={max} value={config.pipeline[key]} onChange={event=>setConfig(current=>({...current,pipeline:{...current.pipeline,[key]:Number(event.target.value)}}))}/></label>)}
       <button type="button" className="settings-link" onClick={onOpenPipeline}>查看整理进度与导入原话</button>

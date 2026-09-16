@@ -45,21 +45,39 @@ def prepare_turn(window_id, incoming):
     return anchor
 
 
+def _user_event(turn):
+    user = turn['user']
+    metadata = {'archive_version': 1, 'timestamp_source': 'proxy_received',
+                'attachments': user['attachments']}
+    if turn['message_id']:
+        metadata['original_message_id'] = turn['message_id']
+    return {'source': 'serein_chat', 'source_event_id': turn['key'] + ':user',
+            'role': user['role'], 'text': user['text'], 'created_at': turn['received_at'],
+            'session_id': turn['window_id'], 'conversation_id': turn['window_id'],
+            'client': 'serein_chat_proxy', 'metadata': metadata}
+
+
+def archive_user_turn(settings, turn):
+    if turn is None:
+        return {'status': 'skipped', 'reason': 'no_user_message', 'message_ids': []}
+    result = raw_archive(settings).ingest([_user_event(turn)], source='serein_chat')
+    return {'status': 'rejected' if result['rejected'] else 'recorded',
+            'inserted': result['inserted'], 'duplicate': result['duplicate'],
+            'rejected': result['rejected'], 'message_ids': [item['id'] for item in result['items'] if item.get('id')]}
+
+
 def archive_turn(settings, turn, message):
     if turn is None:
         return {'status': 'skipped', 'reason': 'no_user_message'}
-    user = turn['user']
-    items = [(user, 'user', turn['received_at'], 'proxy_received')]
+    items = []
     if not message.get('tool_calls'):
         answer = original({**message, 'role': 'assistant'})
         if answer['text']:
             items.append((answer, 'assistant:' + digest(encode(answer)), now(), 'response_completed'))
-    events = []
+    events = [_user_event(turn)]
     for item, suffix, stamp, time_source in items:
         metadata = {'archive_version': 1, 'timestamp_source': time_source,
                     'attachments': item['attachments']}
-        if suffix == 'user' and turn['message_id']:
-            metadata['original_message_id'] = turn['message_id']
         events.append({'source': 'serein_chat', 'source_event_id': turn['key'] + ':' + suffix,
                        'role': item['role'], 'text': item['text'], 'created_at': stamp,
                        'session_id': turn['window_id'], 'conversation_id': turn['window_id'],
