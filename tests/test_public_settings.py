@@ -308,14 +308,19 @@ def test_current_time_only_reaches_chat_context_not_raw_archive(deployment,monke
     monkeypatch.setattr('serein.api.chat.complete',complete)
     monkeypatch.setattr('serein.api.chat.current_time_context',
         lambda timezone:f'Serein current date and time: 2026-09-16T06:07:08+09:00 ({timezone}).')
+    monkeypatch.setattr('serein.configured_models.memory_ready',lambda settings:True)
+    monkeypatch.setattr('serein.application.Services.recall',lambda *args,**options:{
+        'context':'Synthetic recalled memory','selected_refs':['scene:synthetic']})
     off=client.post('/v1/chat/completions',headers={'X-Serein-Window-ID':'clock-off'},
         json={'messages':[{'role':'user','content':'Clock question off'}]})
     assert off.status_code==200 and 'Serein current date and time' not in forwarded[-1]
     client.patch('/v1/settings',json={'features':{'current_time':True},'clock':{'timezone':'Asia/Tokyo'}}).raise_for_status()
     on=client.post('/v1/chat/completions',headers={'X-Serein-Window-ID':'clock-on'},
-        json={'messages':[{'role':'user','content':'Clock question on'}]})
+        json={'messages':[{'role':'user','content':'Clock question on'}],'serein':{'memory':True}})
     assert on.status_code==200
     assert '2026-09-16T06:07:08+09:00 (Asia/Tokyo)' in forwarded[-1]
+    assert forwarded[-1].index('Synthetic recalled memory') < forwarded[-1].index('Serein current date and time')
+    assert forwarded[-1].index('Serein current date and time') < forwarded[-1].index('Current user message:')
     with Store(settings.database,read_only=True) as store:
         archived='\n'.join(row[0] for row in store.conn.execute('SELECT text FROM raw_events ORDER BY id'))
     assert 'Clock question on' in archived
