@@ -8,6 +8,8 @@ Use verified bound original text first, otherwise the supplied authored material
 Update reads the existing body and newly added material; rewrite reads all currently bound material.
 Removing material requires rewrite. Preserve dates, speakers and corrections in their final supported form.
 Do not invent facts, infer new relationships, force closure, or narrate the editing process.
+Do not infer speech acts such as advice, persuasion, reminders or explanations from the order of facts or a later decision. Write them only when the source explicitly supports that they were said; otherwise state the supported facts directly.
+Keep the body at no more than 500 characters.
 If evidence is insufficient, return an empty body and explicit issues using the provided output schema.
 If images are referenced, the runner must resolve and inspect every image or return insufficient evidence.
 
