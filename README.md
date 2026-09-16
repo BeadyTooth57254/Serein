@@ -175,7 +175,7 @@ Track 不设按时间删除的期限。每次归线默认只读取同一来源�
 
 **ChiYouyu · Haven**
 
-[论文 PDF](docs/paper/pdf/serein-event-memory-v0.18-ChiYouyu-Haven.zh-CN.pdf) · [Markdown 正文](docs/paper/manuscript.zh-CN.md) · [补充表格与材料范围](docs/paper/README.md)
+[论文 PDF](docs/paper/pdf/event-memory-paper.zh-CN.pdf) · [Markdown 正文](docs/paper/manuscript.zh-CN.md) · [补充表格与材料范围](docs/paper/README.md)
 
 当前是中文 v0.18 仓库阅读版。论文保留历史实验条件；本仓库当前功能以使用文档为准。
 

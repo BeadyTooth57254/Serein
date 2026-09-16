@@ -6,6 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "serein"
 version = "0.1.0"
 description = "Authored memories, evidence, and independent surfacing decisions"
+license = {file = "LICENSE"}
 requires-python = ">=3.11"
 dependencies = ["PyYAML>=6,<7", "jieba==0.42.1", "setuptools<81", "tzdata>=2024.1"]
 

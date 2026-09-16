@@ -5,11 +5,11 @@
 **ChiYouyu · Haven**
 中文 v0.18 · 2026-09-13 · 仓库阅读副本。
 
-[阅读 PDF](pdf/serein-event-memory-v0.18-ChiYouyu-Haven.zh-CN.pdf) · [阅读 Markdown](manuscript.zh-CN.md) · [补充表格 PDF](pdf/event-memory-supplementary-tables.zh-CN.pdf) · [补充表格 Markdown](supplementary-tables.md)
+[阅读 PDF](pdf/event-memory-paper.zh-CN.pdf) · [阅读 Markdown](manuscript.zh-CN.md) · [补充表格 PDF](pdf/event-memory-supplementary-tables.zh-CN.pdf) · [补充表格 Markdown](supplementary-tables.md)
 
 论文讨论三个问题：交错消息怎样持续归入已有经历，为什么经历边界需要延迟结算，以及来源角色和续接关系怎样被保留并接受追溯。案例同时报告来源保留、误收、角色丢失与中断；自动摘要不能保证完全准确，手动修订后的结果不计作自动生成正确。
 
-当前 PDF 入口指向独立保存的 v0.18 署名版，封面署名为 **ChiYouyu · Haven**。重建脚本输出的通用文件与这份副本分开保留。
+当前 PDF 入口指向随仓库保存的阅读版，封面署名为 **ChiYouyu · Haven**。
 
 ## 与公开版的关系
 
