@@ -38,7 +38,7 @@ def test_menu_one_updates_existing_instance_and_keeps_first_install(tmp_path,mon
     module.main()
     assert calls==(['update'] if installed else ['environment','tools','install'])
     assert menus[0]['1']==('拉取上游代码并重建' if installed else '安装 Serein（全新安装／旧库迁移）')
-    assert '11' not in menus[0]
+    assert menus[0]['11']=='旧 Scene 补 cues'
     assert not any('本地源码' in label for label in menus[0].values())
 
 
@@ -54,6 +54,18 @@ def test_history_repair_menu_previews_before_confirmation_and_stops_only_for_app
     monkeypatch.setattr(module,'service_action',lambda *a:calls.append(a))
     module.repair_legacy_history()
     assert calls==[('repair-history','/legacy/input')]+([('stop',),('repair-history','/legacy/input','--apply'),('up',)] if confirmed else [])
+
+
+@pytest.mark.parametrize('confirmed',[False,True])
+def test_cue_repair_menu_previews_before_confirmation_and_stops_only_for_apply(tmp_path,monkeypatch,confirmed):
+    module=manager();deploy=tmp_path/'deploy';deploy.mkdir();(deploy/'config.toml').write_text('synthetic')
+    monkeypatch.setattr(module,'DEPLOY',deploy)
+    monkeypatch.setattr(module,'confirm',lambda *a:confirmed)
+    calls=[]
+    monkeypatch.setattr(module,'container_command',lambda *a,**kw:calls.append(a))
+    monkeypatch.setattr(module,'service_action',lambda *a:calls.append(a))
+    module.repair_legacy_cues()
+    assert calls==[('repair-cues',)]+([('stop',),('repair-cues','--apply'),('up',)] if confirmed else [])
 
 
 def public_access():

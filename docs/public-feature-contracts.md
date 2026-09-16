@@ -38,7 +38,7 @@ Scene 和日记的新建调用会独立创建内容；内部随机操作编号�
 
 公开版附加的 `set_memory_state` 保留状态、浮现资格和收藏管理；Event 仅允许修改收藏。Scene 提案的 `propose_memory` / `review_memory` 与 Event 升 Scene 的独立可选工具仍保留自身的版本和回执契约。`save_memory` 已移除，旧白名单中的该名称映射到 `write_scene` / `edit_scene`。叙事卷仍由 `narrative_volume` 的 read → preview → save 流程书写，Event 正文由原话整理流水线维护。
 
-`index_sync` 重试已提交写入的索引同步；它不等同于配置页的“建立 / 补齐检索索引”。工具默认关闭，在设置 → 功能开启“索引重试”后才向模型和扩展 HTTP 接口提供；关闭不影响规范写入后的自动同步或后台 Index Worker。
+已提交写入的索引同步由规范写入路径、后台 Index Worker 和维护脚本负责，不向聊天模型提供手动重试工具。
 
 ## 聊天指令接续
 
@@ -62,11 +62,11 @@ Scene 和日记的新建调用会独立创建内容；内部随机操作编号�
 
 ## 开关与名字
 
-`features.memos`、`persona`、`anti_retreat`、`window_shadows`、`association`、`relations_auto_accept`、`resume`、`originals`、`narrative_tools`、`index_sync_tool` 默认 false，写入实例数据库。备忘的界面名称统一为“备忘”，描述为“留给未来的话”。保存后后续请求直接读取，停止注入而不清空原有记录。
+`features.memos`、`persona`、`anti_retreat`、`window_shadows`、`association`、`relations_auto_accept`、`resume`、`originals`、`narrative_tools` 默认 false，写入实例数据库。备忘的界面名称统一为“备忘”，描述为“留给未来的话”。保存后后续请求直接读取，停止注入而不清空原有记录。
 
 “联想”（`features.association`）是独立开关，位于设置 → 功能；保存后下一次召回生效，无需重启或重建索引。关闭时只走直接召回，不查询关系边或返回召回关联诊断列表，保留已有关系及其管理功能。直接候选前 6 条向量结果保底，第 7–20 条须达到已保存的整篇／片段门槛（默认 0.50）、cue 语义门槛（默认 0.55）、Event 特定关键词或带回忆意图的完整实体名之一；扩展信号各最多 3 条，只取得 reranker 资格，不加分。开启联想后，从直接 Scene 候选的已确认关系中最多再补一条 Scene，共用一次 reranker，仍须达到已保存的最终门槛（默认 0.65），最多两卡，选卡后冷却且不补位。三个门槛保存后下一轮生效，无需重建向量；旧客户端只保存最终门槛时保留另外两项。联想不自动开启“关系提案自动通过”，自动通过也不自动开启联想；旧实例缺少此字段按关闭处理。
 
-备忘开启时注册 `memo_create`、`memo_list`、`memo_update`；窗影开启时只注册 `window_shadow_write`；开窗续接使用 `/resume` 指令；原话查阅开启时注册 `source_message_search`、`source_message_read`；索引重试开启时注册 `index_sync`。MCP 的 tools/list 和 tools/call 都重新核对开关，HTTP 同样处理关闭状态。客户端应刷新工具列表；即使缓存着旧列表，关闭的工具也不能调用。白名单继续限制可以出现的工具。
+备忘开启时注册 `memo_create`、`memo_list`、`memo_update`；窗影开启时只注册 `window_shadow_write`；开窗续接使用 `/resume` 指令；原话查阅开启时注册 `source_message_search`、`source_message_read`。MCP 的 tools/list 和 tools/call 都重新核对开关，HTTP 同样处理关闭状态。客户端应刷新工具列表；即使缓存着旧列表，关闭的工具也不能调用。白名单继续限制可以出现的工具。
 
 备忘独立于普通记忆召回，保留单次、每日、每 N 轮、晨晚时段和每天次数限制。聊天上游完整返回最终回复后才登记提醒；工具续轮或失败流不消耗提醒。心绪和防撤退共用“心绪/防撤退”模型（assignments.persona），功能开关独立。防撤退在完整回复结束后异步判断，不等待它才发送上游回复。信号仅供下一轮使用，过期或迟到不补发；同一窗口两次提示至少相隔 6 轮且 10 分钟，冷却与待提示内容持久化。检测失败不影响已返回的正文。关闭的功能不调用其模型。
 

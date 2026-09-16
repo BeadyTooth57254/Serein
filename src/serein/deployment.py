@@ -12,7 +12,7 @@ from .core.store import Store, encode, Conflict, now
 DEFAULT_IDENTITY = {'user_name': 'User', 'ai_name': 'AI'}
 DEFAULT_UPSTREAM = {'base_url': '', 'model': '', 'writer_model': '', 'api_key': '',
                     'writer_enabled': False, 'memory_enabled': False, 'operit_enabled': True}
-DEFAULT_FEATURES = {'memos':False, 'persona':False, 'anti_retreat':False, 'window_shadows':False, 'association':False, 'write_context':False, 'relations_auto_accept':False, 'resume':False, 'originals':False, 'favorites':False, 'narrative_tools':False, 'event_to_scene':False, 'index_sync_tool':False, 'current_time':False}
+DEFAULT_FEATURES = {'memos':False, 'persona':False, 'anti_retreat':False, 'window_shadows':False, 'association':False, 'write_context':False, 'relations_auto_accept':False, 'resume':False, 'originals':False, 'favorites':False, 'narrative_tools':False, 'event_to_scene':False, 'current_time':False}
 DEFAULT_CLOCK = {'timezone':'Asia/Shanghai'}
 DEFAULT_RESUME = {'latest_shadow':True, 'recent_events':True, 'favorite_scenes':True, 'selected_memories':False, 'selected_ids':[],
                   'recent_originals':False, 'recent_original_limit':20, 'pending_originals':True}
@@ -35,7 +35,8 @@ def read_from_store(store):
     legacy_mode = 'legacy' if any(saved.get('assignments', {}).get(role) for role in ('track_router','event_curator','event_writer')) else 'agent'
     return {'settings_version':saved.get('settings_version',0), 'identity': {**DEFAULT_IDENTITY, **saved.get('identity', {})},
             'upstream': {**DEFAULT_UPSTREAM, **saved.get('upstream', {})},
-            'features': {**DEFAULT_FEATURES, **saved.get('features', {})},
+            # Retired feature keys in an older database must not revive removed tools.
+            'features': {key:saved.get('features', {}).get(key, value) for key,value in DEFAULT_FEATURES.items()},
             'clock': {**DEFAULT_CLOCK, **saved.get('clock', {})},
             'recall': saved.get('recall', {}),
             'resume': {key:saved.get('resume', {}).get(key, value) for key,value in DEFAULT_RESUME.items()},

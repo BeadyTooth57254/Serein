@@ -287,7 +287,6 @@ bash scripts/one_click.sh
 | --- | --- | --- |
 | 查阅原话 | `source_message_search`、`source_message_read` | 开启“原话查阅”；先按可选关键词、日期、说话者搜索，再按原话 ID 精确读取，可带同会话前后消息 |
 | 将 Event 写成 Scene | `promote_event_to_scene` | 可写实例且开启“Event 升为 Scene”；主窗口编辑后提交，保留 Event 原件并停止其自动浮现和修订箱候选 |
-| 重试索引更新 | `index_sync` | 可写实例且开启“索引重试”；处理已经进入待同步队列的任务。关闭工具不影响写入后的自动同步和后台 Index Worker |
 | 读取收藏 | `read_favorites` | 开启“收藏工具”；分页读收藏的 Event / Scene，可附原文证据 |
 | 照顾备忘 | `memo_create`、`memo_list`、`memo_update` | 可写实例且开启备忘；创建、查询、修改安排或标完成，独立于 Scene / Event |
 | 写窗影 | `window_shadow_write` | 可写实例且开启窗影；保存供之后续接的窗口记录 |

@@ -63,6 +63,8 @@ def main():
     p.add_argument('source',type=Path,nargs='?');p.add_argument('--apply',action='store_true')
     p=sub.add_parser('repair-history',help='补入早期迁移遗漏的梦境、窗影、正式日记和暗房')
     p.add_argument('source',type=Path);p.add_argument('--apply',action='store_true')
+    p=sub.add_parser('repair-cues',help='为已导入但缺少 cues 的旧 Scene 显式补齐 cues')
+    p.add_argument('--apply',action='store_true')
     args=parser.parse_args();settings=load_settings(args.config)
     root=settings.database.parent/'migrations';root.mkdir(parents=True,exist_ok=True)
     with exclusive_lock(root/'operation.lock'):
@@ -105,6 +107,14 @@ def main():
             result=run_repair(settings,records,issues)
             print(json.dumps({k:result[k] for k in ('counts','backup','report','issues')},ensure_ascii=False,indent=2));return
         initialize(settings)
+        if args.command=='repair-cues':
+            from .cues import preview,run
+            current=preview(settings.database)
+            print(json.dumps(current,ensure_ascii=False,indent=2))
+            print('只处理活动的 Ombre 旧导入 Scene；保留正文和已有 cues。会调用打标模型并产生费用。')
+            if not args.apply:
+                print('当前仅预览；使用 --apply 执行。');return
+            print(json.dumps(asyncio.run(run(settings)),ensure_ascii=False,indent=2));return
         if args.command=='vectors':print(json.dumps(maintain(settings,args.mode),ensure_ascii=False));return
         source=unpack(args.source,root)
         plan=scan(source)

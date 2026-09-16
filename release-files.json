@@ -215,6 +215,7 @@
   "src/serein/legacy_migration/originals.py",
   "src/serein/legacy_migration/dates.py",
   "src/serein/legacy_migration/comments.py",
+  "src/serein/legacy_migration/cues.py",
   "src/serein/legacy_migration/vectors.py",
   "src/serein/legacy_migration/web.py",
   "src/serein/legacy_migration/workflow.py",

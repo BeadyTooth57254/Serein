@@ -65,10 +65,11 @@ def test_event_scene_switch_persists_and_refreshes_http_mcp(tmp_path, writable):
         assert services.read(event['id'])['document']['body_md'] == 'A trip'
 
 
-def test_index_sync_switch_refreshes_http_and_mcp(tmp_path):
-    database = tmp_path/'index-sync.db'
+def test_retired_index_sync_setting_does_not_restore_http_or_mcp_tool(tmp_path):
+    database = tmp_path/'retired-index-sync.db'
     with Store(database):
         pass
+    save_settings(database, {'features':{'index_sync_tool':True}})
     settings = Settings(database, writable=True)
     headers = {'Authorization':'Bearer test', 'Accept':'application/json, text/event-stream'}
     with TestClient(create_app(settings, token='test', live=True), headers=headers) as client:
@@ -81,21 +82,12 @@ def test_index_sync_switch_refreshes_http_and_mcp(tmp_path):
         def names():
             return {tool['name'] for tool in rpc('tools/list')['tools']}
 
-        def call():
-            return rpc('tools/call', {'name':'index_sync', 'arguments':{}})
-
         assert 'index_sync' not in names()
-        assert call()['isError']
+        assert rpc('tools/call', {'name':'index_sync', 'arguments':{}})['isError']
         assert client.post('/v1/extensions/index_sync', json={}).status_code == 404
         response = client.patch('/v1/settings', json={'features':{'index_sync_tool':True}})
-        assert response.status_code == 200, response.text
-        assert 'index_sync' in names()
-        assert call()['structuredContent'] == {'status':'current', 'updated':0}
-        assert client.post('/v1/extensions/index_sync', json={}).json() == {'status':'current', 'updated':0}
-        assert client.patch('/v1/settings', json={'features':{'index_sync_tool':False}}).status_code == 200
-        assert call()['isError']
-        assert client.post('/v1/extensions/index_sync', json={}).status_code == 404
-        assert 'index_sync' not in names()
+        assert response.status_code == 422
+        assert 'index_sync_tool' not in client.get('/v1/settings').json()['features']
 
 
 @pytest.mark.parametrize('writable', [False, True])

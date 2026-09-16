@@ -520,6 +520,19 @@ def repair_legacy_history():
     print('补漏结束，请查看报告中的 ID 对应关系及待核对记录；同一备份可安全重跑。')
 
 
+def repair_legacy_cues():
+    if not (DEPLOY/'config.toml').is_file():raise ValueError('请先部署当前实例')
+    heading('旧 Scene 补 cues · 显式模型调用')
+    print('只处理已导入、仍活动且缺少 cues 的 Ombre Scene；保留正文、已有 cues 和已完成的主域／实体。')
+    print('失败项会保存进度并停止自动重试；再次执行会从缺失或失败项继续。')
+    container_command('repair-cues')
+    if not confirm('按以上预览补 cues（会调用打标模型并产生费用，执行前自动备份）'):return
+    service_action('stop')
+    try:container_command('repair-cues','--apply')
+    finally:service_action('up')
+    print('补 cues 已结束。已有 cues 未覆盖；空结果也会记为已处理，避免重复收费。')
+
+
 def restart():
     choice=choose('重启服务',[('0','Gateway 网关'),('1','记忆库')],back=True)
     if choice=='r':return
@@ -583,7 +596,7 @@ def main():
         try:
             print(f'\n安装目录：{ROOT}\n实例数据：{DEPLOY / "runtime"}')
             choice=choose('Serein · 安装与维护',[
-                ('0','设置前端用户名／密码'),('1','拉取上游代码并重建' if (DEPLOY/'config.toml').is_file() else '安装 Serein（全新安装／旧库迁移）'),('2','重启服务'),('3','向量重建与清理'),('4','启动／停止／状态／日志'),('5','访问入口：本机／局域网／公网'),('6','更换 Gateway Key'),('7','网页旧库目录只读授权'),('8','旧边转换补救（早期版本未转换成功）'),('9','旧备份清理'),('10','历史数据补漏（梦境／窗影／日记／暗房）'),('q','退出')])
+                ('0','设置前端用户名／密码'),('1','拉取上游代码并重建' if (DEPLOY/'config.toml').is_file() else '安装 Serein（全新安装／旧库迁移）'),('2','重启服务'),('3','向量重建与清理'),('4','启动／停止／状态／日志'),('5','访问入口：本机／局域网／公网'),('6','更换 Gateway Key'),('7','网页旧库目录只读授权'),('8','旧边转换补救（早期版本未转换成功）'),('9','旧备份清理'),('10','历史数据补漏（梦境／窗影／日记／暗房）'),('11','旧 Scene 补 cues'),('q','退出')])
             if choice=='q':return
             spec=importlib.util.spec_from_file_location('installer_lock',ROOT/'src'/'serein'/'file_lock.py')
             locks=importlib.util.module_from_spec(spec);spec.loader.exec_module(locks)
@@ -597,7 +610,7 @@ def main():
                 else:
                     if select_environment() is False:continue
                     ensure_tools()
-                    {'1':deploy,'2':restart,'3':maintenance,'4':operations,'5':access,'6':rotate_key,'7':legacy_source_access,'8':repair_legacy_edges,'10':repair_legacy_history}[choice]()
+                    {'1':deploy,'2':restart,'3':maintenance,'4':operations,'5':access,'6':rotate_key,'7':legacy_source_access,'8':repair_legacy_edges,'10':repair_legacy_history,'11':repair_legacy_cues}[choice]()
         except EOFError:
             print('\n输入已结束，退出管理菜单。');return
         except KeyboardInterrupt:print('\n已取消当前操作。')
