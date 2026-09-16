@@ -69,11 +69,11 @@ def test_real_proxy_persona_cadence_context_and_tool_continuation(deployment,mon
     state=client.get('/v1/companion/persona?session_id=w').json()
     assert state['session']['inner_thought']=='刚才答得太快了。其实还想再听两句，不过也不用急着追问，等这段话慢慢说完吧。' and state['relationship']['trust']>.51
     assert state['events']
-    # Changes appear only on the 15-round reminder cadence, not as a whole state dump.
+    # Persona remains evaluation and display state; it never enters the next prompt.
     with Store(settings.database) as db,db.transaction():
         db.conn.execute('UPDATE background_state SET value_json=? WHERE name=?',(encode(14),'feature_round:w'))
     text,_=asyncio.run(prepare(settings.database,'w','继续',history))
-    assert '[你的情绪]' in text and 'Current Persona State' not in text and '当前心绪状态' not in text
+    assert text=='' and len(evaluations)==1
 
 
 @pytest.mark.parametrize('ending',['complete','truncated','tool'])

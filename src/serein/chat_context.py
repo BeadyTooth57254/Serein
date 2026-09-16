@@ -348,6 +348,7 @@ class ClientContext:
         messages: list[dict],
         stable_context: str,
         dynamic_context: str,
+        trailing_context: str = "",
     ) -> list[dict]:
         new_messages = deepcopy(messages)
         if stable_context.strip():
@@ -367,6 +368,17 @@ class ClientContext:
                 dynamic_message = {"role": "system", "content": dynamic_context}
                 insert_at = self._after_leading_system_index(new_messages)
                 new_messages.insert(insert_at, dynamic_message)
+        if trailing_context.strip():
+            current_user_index = self._current_turn_user_index(new_messages)
+            if current_user_index is not None:
+                new_messages[current_user_index] = self._append_dynamic_context_to_user_message(
+                    new_messages[current_user_index],
+                    trailing_context,
+                )
+            else:
+                trailing_message = {"role": "system", "content": trailing_context}
+                insert_at = self._after_leading_system_index(new_messages)
+                new_messages.insert(insert_at, trailing_message)
         return new_messages
 
     def _remember_turn_injection_snapshot(
@@ -567,6 +579,26 @@ class ClientContext:
             updated["content"] = [{"type": "text", "text": prefix}, *deepcopy(content)]
         else:
             updated["content"] = prefix
+        return updated
+
+    def _append_dynamic_context_to_user_message(
+        self,
+        message: dict[str, Any],
+        dynamic_context: str,
+    ) -> dict[str, Any]:
+        updated = deepcopy(message)
+        suffix = (
+            "\n\n<serein_current_time>\n"
+            f"{dynamic_context}\n"
+            "</serein_current_time>"
+        )
+        content = updated.get("content")
+        if isinstance(content, str):
+            updated["content"] = content + suffix
+        elif isinstance(content, list):
+            updated["content"] = [*deepcopy(content), {"type": "text", "text": suffix.lstrip()}]
+        else:
+            updated["content"] = suffix.lstrip()
         return updated
 
     def _operit_context_rewrite_debug_base(self) -> dict[str, Any]:

@@ -54,11 +54,6 @@ async def prepare(database, window_id, query, messages):
         if due:
             parts.append('备忘 · 留给未来的话（原文资料）：\n'+json.dumps(
                 [{'memo_id':item['id'],'title':item['title'],'content':item['content']} for item in due],ensure_ascii=False))
-    if features['persona'] and task_model(database,'persona'):
-        engine = persona_engine(database,'persona',state)
-        await engine.build_pre_reply_guidance(window_id,query)
-        if receipt['round'] % engine.state_change_window_rounds == 0:
-            parts.append(engine.format_recent_change_block(window_id))
     if features['anti_retreat']:
         with Store(database,read_only=True) as store:
             row=store.conn.execute('SELECT value_json FROM background_state WHERE name=?',('anti_retreat:'+window_id,)).fetchone()

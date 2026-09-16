@@ -319,8 +319,9 @@ def test_current_time_only_reaches_chat_context_not_raw_archive(deployment,monke
         json={'messages':[{'role':'user','content':'Clock question on'}],'serein':{'memory':True}})
     assert on.status_code==200
     assert '2026-09-16T06:07:08+09:00 (Asia/Tokyo)' in forwarded[-1]
-    assert forwarded[-1].index('Synthetic recalled memory') < forwarded[-1].index('Serein current date and time')
-    assert forwarded[-1].index('Serein current date and time') < forwarded[-1].index('Current user message:')
+    assert forwarded[-1].index('Synthetic recalled memory') < forwarded[-1].index('Current user message:')
+    assert forwarded[-1].index('Clock question on') < forwarded[-1].index('Serein current date and time')
+    assert forwarded[-1].endswith('</serein_current_time>')
     with Store(settings.database,read_only=True) as store:
         archived='\n'.join(row[0] for row in store.conn.execute('SELECT text FROM raw_events ORDER BY id'))
     assert 'Clock question on' in archived
