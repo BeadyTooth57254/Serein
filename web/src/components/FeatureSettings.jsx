@@ -3,7 +3,7 @@ import {ResumeMemoryPicker} from './ResumeMemoryPicker.jsx';
 import {instanceSettings} from '../storage/instanceStore.js';
 
 const features = {
-  current_time:['当前日期时间','每个新用户轮次向聊天主模型注入所选时区的日期和时间；工具续轮沿用该轮时间。'],
+  current_time:['当前日期时间','每个新用户轮次向聊天主模型注入所选时区的日期和时间；工具续轮沿用该轮时间。只保证当轮请求能看到时间，Serein 无法修改客户端已落盘的消息记录。'],
   memos:['备忘','留给未来的话。到期时带入聊天；关闭后不注册备忘工具。'],
   persona:['心绪','记录并延续对话状态。请在“配置”页选择“心绪/防撤退”使用的模型。'],
   anti_retreat:['防撤退','使用“心绪/防撤退”模型，回复后异步判断、下一轮提示。同一窗口冷却 6 轮且至少 10 分钟。'],
