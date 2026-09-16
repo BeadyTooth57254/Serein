@@ -10,7 +10,7 @@ from .imports import initialize_imports
 from .core.store import Store, digest
 from .deployment import identity, task_model, read_settings
 from .tagging_entities import VERSION, snapshot, prompt_materials, validate
-from .tagging_cues import CUE_PROMPT, validate_cues
+from .tagging_cues import CUE_PROMPT, forbidden_names, validate_cues
 
 TAGGING_PROMPT = '''判断记忆的主域大标签，并提取与这条记忆内容相关的明确命名实体。
 只返回 JSON {"domain":"主域 key 或 null","entities":[{"name":"原文中的完整名字","type":"person/place/organization/work/project/product/other","supports":[{"source_id":"提供的材料 ID","quote":"包含这个名字的连续原文"}],"aliases":[]}]}。
@@ -80,6 +80,7 @@ async def tag_one(database,job):
             sent_materials=prompt_materials(materials)
             generate_cues=needs_operit_cues(doc)
             names=identity(database)
+            blocked_names=forbidden_names(names)
             prompt=TAGGING_PROMPT
             if generate_cues:
                 prompt=prompt.replace('不改正文、不生成经历或召回 cue。','不改正文、不生成经历。')+'\n'+CUE_PROMPT
@@ -87,7 +88,7 @@ async def tag_one(database,job):
                 {'role':'system','content':prompt},
                 {'role':'user','content':json.dumps({'identity':names,'domains':domains,'kind':doc['kind'],
                     'title':doc['title'],'content':doc['body_md'][:16000],
-                    **({'forbidden_names':list(names.values()),
+                    **({'forbidden_names':blocked_names,
                         'validation_feedback':job.get('error','') if job.get('attempts') else ''} if generate_cues else {}),
                     'materials':sent_materials},ensure_ascii=False)}],
                 'response_format':{'type':'json_object'},'max_tokens':3000,
@@ -97,7 +98,7 @@ async def tag_one(database,job):
             domain_valid=('domain' in output and (domain is None or
                 isinstance(domain,str) and domain in {item['key'] for item in domains}))
             entities,rejected=validate(output.get('entities'),sent_materials)
-            cues=validate_cues(output.get('cues'),list(names.values())) if generate_cues else None
+            cues=validate_cues(output.get('cues'),blocked_names) if generate_cues else None
             with Store(database) as store,store.transaction(immediate=True):
                 current=store.read(doc['id'])
                 if (not current or current['revision']!=doc['revision'] or current['lifecycle']!='active'

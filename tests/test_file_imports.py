@@ -292,7 +292,7 @@ def test_operit_completed_tagging_backfills_cues_once_and_respects_opt_out(setti
         assert store.conn.execute('SELECT count(*) FROM import_tag_jobs').fetchone()[0]==1
 
 
-def test_operit_cue_validation_retry_and_concurrent_author_cues_preserved(settings,monkeypatch):
+def test_operit_named_cue_is_dropped_without_retry(settings,monkeypatch):
     upload=stage(settings.database,json.dumps(operit()),'operit.json','auto',True)
     advance_import(settings,upload['id'])
     save_settings(settings.database,{'models':[{'id':'local','model':'synthetic','base_url':'http://127.0.0.1:9/v1'}],
@@ -300,32 +300,15 @@ def test_operit_cue_validation_retry_and_concurrent_author_cues_preserved(settin
     calls=[]
     async def complete(model,payload):
         request=json.loads(payload['messages'][1]['content']);calls.append(request)
-        if len(calls)==1:cues=['Atlas remembers this']
-        else:
-            assert 'cue 包含用户或 AI 名字' in request['validation_feedback']
-            cues=['Original body']
-            with Store(settings.database) as store:
-                key=store.conn.execute('SELECT document_id FROM import_tag_jobs').fetchone()[0];doc=store.read(key)
-                store.revise(key,expected_revision=doc['revision'],title=doc['title'],body_md=doc['body_md'],
-                    metadata={**doc['metadata'],'scene_cues':['Authored cue']})
-        return {'choices':[{'message':{'content':json.dumps({'domain':'life','entities':[],'cues':cues})}}]}
+        return {'choices':[{'message':{'content':json.dumps({'domain':'life','entities':[],'cues':['Atlas remembers this']})}}]}
     monkeypatch.setattr('serein.model_runtime.complete',complete)
     asyncio.run(process(settings.database))
     with Store(settings.database) as store:
         row=store.conn.execute('SELECT * FROM import_tag_jobs').fetchone()
-        assert row['status']=='failed' and 'cue 包含用户或 AI 名字' in row['error']
+        assert row['status']=='done' and row['attempts']==1 and row['error']==''
         assert store.read(row['document_id'])['metadata']['scene_cues']==[]
-        store.conn.execute("UPDATE import_tag_jobs SET status='pending'")  # Explicit user retry.
-    asyncio.run(process(settings.database))
-    with Store(settings.database) as store:
-        row=store.conn.execute('SELECT * FROM import_tag_jobs').fetchone()
-        assert row['status']=='stale' and store.read(row['document_id'])['metadata']['scene_cues']==['Authored cue']
-    async def metadata_only(model,payload):
-        assert '额外返回 cues 数组' not in payload['messages'][0]['content']
-        return {'choices':[{'message':{'content':json.dumps({'domain':'life','entities':[],'cues':['Ignored model cue']})}}]}
-    monkeypatch.setattr('serein.model_runtime.complete',metadata_only)
-    asyncio.run(process(settings.database))
-    with Store(settings.database) as store:assert store.read(row['document_id'])['metadata']['scene_cues']==['Authored cue']
+        assert store.read(row['document_id'])['metadata']['operit_cues_generated'] is True
+    asyncio.run(process(settings.database));assert len(calls)==1
 
 
 def test_retry_one_preserves_success_and_other_failures(settings):
