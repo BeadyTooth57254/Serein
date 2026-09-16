@@ -15,7 +15,7 @@ from . import pipeline_tracks as track_state
 
 ROLES=('track_router','event_curator','event_writer')
 TZ=timezone(timedelta(hours=8))
-CONTRACT='public-event-message-tracks-v3'
+CONTRACT='public-event-message-tracks-v4'
 
 
 def initialize(database):
