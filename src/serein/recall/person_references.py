@@ -4,8 +4,9 @@ import re
 
 
 _QUOTED = re.compile(r'''(“[^”]*”|「[^」]*」|『[^』]*』|‘[^’]*’|"[^"]*"|'[^']*'|`+[^`]*`+)''')
-# Long forms first; do not split plurals or common non-pronoun words.
-_PERSON_REFERENCE = re.compile(r'(?<![自忘])我们|咱们|(?<!迷)你(?!们)|您(?!们)|(?<![自忘])我(?!们)')
+# Only possessives identify whose detail is being requested. Bare pronouns and
+# shared references stay conversational rather than adding names to the query.
+_PERSON_REFERENCE = re.compile(r'(?<!迷)你的|(?<![自忘])我的')
 _PLACEHOLDERS = frozenset({'', 'AI', 'User', '用户'})
 
 
@@ -18,11 +19,9 @@ def resolve_person_references(query, identity):
                  if (name := str(names.get(key) or '').strip()) not in _PLACEHOLDERS), '')
     replacements = {}
     if assistant not in _PLACEHOLDERS:
-        replacements.update({'你': assistant, '您': assistant})
+        replacements['你的'] = assistant + '的'
     if user not in _PLACEHOLDERS:
-        replacements['我'] = user
-    if assistant not in _PLACEHOLDERS and user not in _PLACEHOLDERS:
-        replacements.update(dict.fromkeys(('我们', '咱们'), user + '和' + assistant))
+        replacements['我的'] = user + '的'
     parts = _QUOTED.split(text)
     for index in range(0, len(parts), 2):
         parts[index] = _PERSON_REFERENCE.sub(lambda match: replacements.get(match[0], match[0]), parts[index])

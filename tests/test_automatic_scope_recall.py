@@ -42,8 +42,8 @@ def test_narrative_words_do_not_select_a_reader(marker):
 
 
 @pytest.mark.parametrize('query', [
-    '不用从头讲，只说你生日哪天？',
-    '我整体记不清了，你生日是什么时候？',
+    '不用从头讲，只说你的生日哪天？',
+    '我整体记不清了，你的生日是什么时候？',
 ])
 def test_narrative_word_without_arc_still_reaches_relevance_scoring(birthday_recall, query):
     engine, embedded, ranked = birthday_recall

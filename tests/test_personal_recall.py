@@ -21,21 +21,24 @@ def test_evidence_words_no_longer_override_recall_intent(marker):
 
 @pytest.mark.parametrize('query,expected', [
     ('你的生日是什么时候？', 'Orion的生日是什么时候？'),
-    ('你生日什么时候？', 'Orion生日什么时候？'),
-    ('我生日是哪天？', '米拉生日是哪天？'),
-    ('我们第一次见面是哪天？', '米拉和Orion第一次见面是哪天？'),
-    ('咱们什么时候认识的？', '米拉和Orion什么时候认识的？'),
-    ('你还记得我吗？', 'Orion还记得米拉吗？'),
+    ('你生日什么时候？', '你生日什么时候？'),
+    ('我生日是哪天？', '我生日是哪天？'),
+    ('我们第一次见面是哪天？', '我们第一次见面是哪天？'),
+    ('咱们什么时候认识的？', '咱们什么时候认识的？'),
+    ('你还记得我吗？', '你还记得我吗？'),
     ('我的生日是哪天？', '米拉的生日是哪天？'),
-    ('我们的纪念日是哪天？', '米拉和Orion的纪念日是哪天？'),
-    ('咱们的纪念日是哪天？', '米拉和Orion的纪念日是哪天？'),
+    ('我们的纪念日是哪天？', '我们的纪念日是哪天？'),
+    ('咱们的纪念日是哪天？', '咱们的纪念日是哪天？'),
     ('还记得“你的生日是什么时候”这句原话吗？', '还记得“你的生日是什么时候”这句原话吗？'),
     ('请找出`你的生日`这几个字', '请找出`你的生日`这几个字'),
     ('你们的生日', '你们的生日'),
     ('你们和您们什么时候来？', '你们和您们什么时候来？'),
     ('迷你蛋糕和自我介绍', '迷你蛋糕和自我介绍'),
-    ('你说“我生日是哪天”是什么意思？', 'Orion说“我生日是哪天”是什么意思？'),
+    ('你说“我生日是哪天”是什么意思？', '你说“我生日是哪天”是什么意思？'),
     ('自我的探索和忘我的工作', '自我的探索和忘我的工作'),
+    ('迷你的蛋糕', '迷你的蛋糕'),
+    ('您的生日是哪天？', '您的生日是哪天？'),
+    ('喜欢你做的星星，我想起我们聊过的星云', '喜欢你做的星星，我想起我们聊过的星云'),
 ])
 def test_person_references_keep_quoted_perspectives(query, expected):
     assert resolve_person_references(query, IDENTITY) == expected
@@ -109,8 +112,6 @@ def birthday_recall(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize('query,target,rank_query', [
     ('你的生日是什么时候？', 'assistant_birthday', 'Orion的生日是什么时候？'),
-    ('你生日什么时候？', 'assistant_birthday', 'Orion生日什么时候？'),
-    ('我生日是哪天？', 'user_birthday', '米拉生日是哪天？'),
     ('还记得你的生日是什么时候吗？', 'assistant_birthday', '还记得Orion的生日是什么时候吗？'),
     ('我的生日是哪天？', 'user_birthday', '米拉的生日是哪天？'),
     ('还记得你的生日的原话吗？', 'assistant_birthday', '还记得Orion的生日的原话吗？'),
@@ -124,6 +125,29 @@ def test_natural_birthday_question_reaches_reranker_without_rewriting_original(b
     assert result['admission']['mode'] == 'direct_evidence_rerank'
     assert result['candidate_retrieval']['candidate_count'] == 2
     assert result['selected_refs'] == ['scene:' + target]
+    assert not result['pre_candidate_gate']['applied']
+    assert not result['surface_reranker_gate']['applied']
+
+
+@pytest.mark.parametrize('query', [
+    '你生日什么时候？',
+    '我生日是哪天？',
+    '我们第一次见面是哪天？',
+    '喜欢你做的星星，我想起我们聊过的星云',
+])
+def test_bare_and_shared_references_reach_reranker_unchanged(birthday_recall, query):
+    engine, embedded, ranked = birthday_recall
+
+    def rank_original(text, documents):
+        ranked.append((text, documents))
+        return {row['ref']: .1 for row in documents}
+
+    engine.reranker = rank_original
+    result = engine.run(query, method='semantic', min_cosine=.5, user_utterance=True)
+    assert result['query'] == query and embedded == [query]
+    assert ranked[0][0] == query
+    assert result['admission']['rerank_query'] == query
+    assert result['candidate_retrieval']['candidate_count'] == 2
     assert not result['pre_candidate_gate']['applied']
     assert not result['surface_reranker_gate']['applied']
 
@@ -184,7 +208,8 @@ def test_instance_rename_changes_next_rerank_query_without_rewriting_memories(bi
 
     engine, embedded, ranked = birthday_recall
     save_settings(engine.settings.database, {'identity': {'ai_name': 'Lyra', 'user_name': 'Nori'}})
-    for query, expected in [('你生日什么时候？', 'Lyra生日什么时候？'), ('我生日哪天？', 'Nori生日哪天？')]:
+    for query, expected in [('你的生日什么时候？', 'Lyra的生日什么时候？'), ('我的生日哪天？', 'Nori的生日哪天？'),
+                            ('你生日什么时候？', '你生日什么时候？'), ('我们的纪念日呢？', '我们的纪念日呢？')]:
         result = engine.run(query, method='semantic', min_cosine=.5, user_utterance=True)
         assert embedded[-1] == query and ranked[-1][0] == expected
         assert result['query'] == query and result['admission']['rerank_query'] == expected
