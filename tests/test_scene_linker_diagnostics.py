@@ -14,10 +14,14 @@ def response_client(content, finish_reason='stop'):
 
 
 def call(linker, content, finish_reason='stop'):
-    provider = {'name': 'synthetic', 'model': 'synthetic', 'client': response_client(content, finish_reason),
+    client = response_client(content, finish_reason)
+    provider = {'name': 'synthetic', 'model': 'deepseek-flash', 'base_url': 'https://api.deepseek.com',
+                'protocol': 'openai', 'client': client,
                 'token_parameter': 'max_tokens', 'max_tokens': 200}
     payload = {'new_scene': {'scene_id': 'scene:synthetic'}}
-    return asyncio.run(linker._call_provider(provider, payload))
+    result = asyncio.run(linker._call_provider(provider, payload))
+    assert client.chat.completions.create.await_args.kwargs['extra_body']=={'thinking':{'type':'disabled'}}
+    return result
 
 
 def test_invalid_relation_response_logs_safe_shape_by_default(tmp_path, monkeypatch, caplog):

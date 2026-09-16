@@ -201,6 +201,7 @@ def test_cues_opt_out_preserves_saved_cues_and_does_not_schedule_paid_backfill(s
     async def complete(model,payload):
         assert '不生成经历或召回 cue' in payload['messages'][0]['content']
         assert '额外返回 cues 数组' not in payload['messages'][0]['content']
+        assert 'thinking' not in payload  # Unknown providers do not receive private parameters.
         data=json.loads(payload['messages'][1]['content']);assert 'forbidden_names' not in data
         calls.append(data)
         return response({'domain':'life','entities':[],**extra})

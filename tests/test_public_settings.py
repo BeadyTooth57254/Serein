@@ -431,11 +431,21 @@ def test_optional_jobs_use_selected_models(deployment,monkeypatch):
 
 
 def test_native_task_options_and_cache_validation(deployment):
-    from serein.model_runtime import request_for
+    from serein.model_runtime import non_thinking_options, request_for
     from serein.api.settings import ModelEntry
     model={'id':'native','label':'Native','model':'synthetic','base_url':'http://127.0.0.1/v1','protocol':'anthropic'}
     _,_,body=request_for(model,{'messages':[{'role':'user','content':'write'}],
         'thinking':{'type':'disabled'},'max_completion_tokens':4096})
     assert body['thinking']=={'type':'disabled'} and body['max_tokens']==4096
+    assert non_thinking_options({'model':'deepseek-flash','base_url':'https://api.deepseek.com'})=={
+        'thinking':{'type':'disabled'}}
+    assert non_thinking_options({'model':'deepseek-ai/DeepSeek-V4-Flash','base_url':'https://api.siliconflow.cn/v1'})=={
+        'enable_thinking':False}
+    assert non_thinking_options({'model':'ordinary','base_url':'https://provider.example/v1'})=={}
+    _,_,deepseek_anthropic=request_for({'id':'deepseek','model':'deepseek-flash',
+        'base_url':'https://api.deepseek.com/anthropic','protocol':'anthropic'},
+        {'messages':[{'role':'user','content':'extract'}],
+         **non_thinking_options({'model':'deepseek-flash','base_url':'https://api.deepseek.com/anthropic','protocol':'anthropic'})})
+    assert deepseek_anthropic['reasoning']=={'effort':'none'}
     with pytest.raises(ValueError):ModelEntry(**model,prompt_cache='openai')
     with pytest.raises(ValueError):ModelEntry(**model,prompt_cache='anthropic',prompt_cache_retention='24h')

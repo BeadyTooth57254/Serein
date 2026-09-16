@@ -10,7 +10,7 @@ from ..core.store import Store, digest, encode
 from ..deployment import read_settings, save_settings, task_model
 from ..tagging_entities import snapshot, prompt_materials, validate, VERSION
 from ..import_tagging import TAGGING_PROMPT, tagging_output, tagging_failure
-from ..model_runtime import complete
+from ..model_runtime import complete, non_thinking_options
 
 from ..tagging_cues import CUE_PROMPT, validate_cues
 
@@ -180,7 +180,8 @@ class Migration:
             {'role':'user','content':encode({'title':doc['title'],'content':doc['body_md'],'kind':'scene',
                 'domains':catalog,'materials':sent,**({'forbidden_names':names} if generate_cues else {}),
                 **({'validation_feedback':'上次结果未通过校验：'+feedback+'。请修正后重新返回完整 JSON。'+('cues 不得包含禁用名字，正文与实体仍按原文处理。' if generate_cues else '')} if feedback else {})})}],
-            'response_format':{'type':'json_object'},'max_tokens':3500})
+            'response_format':{'type':'json_object'},'max_tokens':3500,
+            **non_thinking_options(model)})
         output=tagging_output(response)
         domain=output.get('domain')
         valid_domain=domain is None or isinstance(domain,str) and domain in {d['key'] for d in catalog}

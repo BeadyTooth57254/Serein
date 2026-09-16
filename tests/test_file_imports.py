@@ -118,12 +118,13 @@ def test_operit_tagging_waits_for_model_and_never_rewrites_body(settings,monkeyp
     advance_import(settings,preview['id'])
     asyncio.run(process(settings.database))
     with Store(settings.database) as store:assert store.conn.execute('SELECT status FROM import_tag_jobs').fetchone()[0]=='pending'
-    save_settings(settings.database,{'models':[{'id':'local','model':'synthetic','base_url':'http://127.0.0.1:9/v1'}],
+    save_settings(settings.database,{'models':[{'id':'local','model':'deepseek-flash','base_url':'https://api.deepseek.com'}],
         'assignments':{'operit_tagging':'local'},'identity':NAMES})
     async def complete(model,payload):
         request=json.loads(payload['messages'][1]['content']);assert request['identity']['ai_name']=='Atlas'
         assert '额外返回 cues 数组' in payload['messages'][0]['content']
         assert 'Atlas' in request['forbidden_names']
+        assert payload['thinking']=={'type':'disabled'}
         return {'choices':[{'message':{'content':json.dumps({'entities':[],'cues':['Original body'],'tags':['reading'],'domain':'life','body':'Invented text ignored'})}}]}
     monkeypatch.setattr('serein.model_runtime.complete',complete)
     asyncio.run(process(settings.database))
@@ -203,10 +204,11 @@ def test_domain_editor_updates_next_tagging_request_without_restart(settings, mo
 
 def test_selected_tagging_binds_existing_cue_to_exact_passage(settings,monkeypatch):
     from serein.recall.legacy_indexes import cue_index
-    save_settings(settings.database,{'models':[{'id':'tagger','model':'synthetic','base_url':'http://127.0.0.1:9/v1','protocol':'anthropic'}],
+    save_settings(settings.database,{'models':[{'id':'tagger','model':'deepseek-flash','base_url':'https://api.deepseek.com/anthropic','protocol':'anthropic'}],
         'assignments':{'operit_tagging':'tagger'}})
     seen=[]
     async def complete(model,payload):
+        assert payload['reasoning']=={'effort':'none'}
         seen.append((model,payload))
         return {'choices':[{'message':{'content':json.dumps({'bindings':[
             {'cue':'借书','passage_ordinal':0,'evidence':'借了一本书','confidence':.9},

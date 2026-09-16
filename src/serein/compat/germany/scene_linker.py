@@ -2106,6 +2106,7 @@ class SceneLinker:
                     "name": name,
                     "model": model,
                     "base_url": base_url,
+                    "protocol": str(raw.get("protocol") or "openai"),
                     "client": client,
                     "max_tokens": max(200, min(int(raw.get("max_tokens", 1100)), 4000)),
                     "token_parameter": token_parameter,
@@ -2554,6 +2555,7 @@ class SceneLinker:
         }
 
     async def _call_provider(self, provider: dict, payload: dict) -> dict | None:
+        from ...model_runtime import non_thinking_options
         options: dict[str, Any] = {
             "model": provider["model"],
             "messages": [
@@ -2562,6 +2564,9 @@ class SceneLinker:
             ],
             provider["token_parameter"]: provider["max_tokens"],
         }
+        thinking_options = non_thinking_options(provider)
+        if thinking_options:
+            options["extra_body"] = thinking_options
         if provider.get("temperature") is not None:
             options["temperature"] = float(provider["temperature"])
         response = await asyncio.wait_for(

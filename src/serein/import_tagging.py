@@ -73,7 +73,7 @@ async def tag_one(database,job):
         status,error='done',''  # The migration may have finished this already-queued job.
     else:
         try:
-            from .model_runtime import complete
+            from .model_runtime import complete, non_thinking_options
             model=task_model(database,'operit_tagging')
             if not model:return
             domains=read_settings(database)['tagging']['domains']
@@ -90,7 +90,8 @@ async def tag_one(database,job):
                     **({'forbidden_names':list(names.values()),
                         'validation_feedback':job.get('error','') if job.get('attempts') else ''} if generate_cues else {}),
                     'materials':sent_materials},ensure_ascii=False)}],
-                'response_format':{'type':'json_object'},'max_tokens':3000})
+                'response_format':{'type':'json_object'},'max_tokens':3000,
+                **non_thinking_options(model)})
             output=tagging_output(response)
             domain=output.get('domain')
             domain_valid=('domain' in output and (domain is None or

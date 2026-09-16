@@ -55,11 +55,12 @@ def cue_index(settings, *, writable=False, profile=None):
             model=selected['model']+':'+digest(encode({key:selected.get(key) for key in ('id','base_url','protocol')}))[:12]
             async def bind(self, **materials):
                 import json
-                from ..model_runtime import complete
+                from ..model_runtime import complete, non_thinking_options
                 response=await complete(selected,{'messages':[
                     {'role':'system','content':BINDING_PROMPT},
                     {'role':'user','content':json.dumps(materials,ensure_ascii=False)}],
-                    'response_format':{'type':'json_object'},'temperature':0,'max_tokens':2000})
+                    'response_format':{'type':'json_object'},'temperature':0,'max_tokens':2000,
+                    **non_thinking_options(selected)})
                 return json.loads(response['choices'][0]['message']['content'])
         binder=ConfiguredBinder()
     return CuePassageShadowIndex(cfg,Embedding(),binder=binder)

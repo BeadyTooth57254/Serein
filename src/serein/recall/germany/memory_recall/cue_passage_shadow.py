@@ -94,6 +94,7 @@ class DeepSeekCuePassageBinder:
     ) -> dict[str, Any]:
         if not self.ready:
             raise RuntimeError("cue_passage_binder_credentials_missing")
+        from ....model_runtime import non_thinking_options
         response = await self.client.chat.completions.create(
             model=self.model,
             messages=[
@@ -109,7 +110,7 @@ class DeepSeekCuePassageBinder:
             temperature=0,
             max_tokens=max(300, min(1200, 160 * len(cues))),
             response_format={"type": "json_object"},
-            extra_body={"thinking": {"type": "disabled"}},
+            extra_body=non_thinking_options({"model": self.model, "base_url": self.base_url}),
         )
         content = str(response.choices[0].message.content or "") if response.choices else ""
         try:

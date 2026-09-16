@@ -2,6 +2,7 @@
 import json
 import time
 from types import SimpleNamespace
+from urllib.parse import urlsplit
 import httpx
 from .chat_context import ClientContext
 from .deployment import task_model
@@ -13,6 +14,19 @@ class UpstreamError(ValueError):
         self.response = response
 
 
+def non_thinking_options(model):
+    """Disable reasoning only through provider/model controls known to support it."""
+    base_url = str(model.get('base_url') or '')
+    host = (urlsplit(base_url).hostname or '').lower()
+    name = str(model.get('model') or '').lower()
+    deepseek = 'deepseek' in host or 'deepseek' in name
+    if str(model.get('protocol') or 'openai') == 'anthropic':
+        return {'reasoning': {'effort': 'none'}} if deepseek else {}
+    if 'siliconflow.' in host:
+        return {'enable_thinking': False}
+    return {'thinking': {'type': 'disabled'}} if deepseek else {}
+
+
 def request_for(model, payload, *, window_id=''):
     adapter = ClientContext()
     payload = {**payload, 'model': model['model']}
@@ -20,6 +34,10 @@ def request_for(model, payload, *, window_id=''):
         if isinstance(payload.get('thinking'), dict):
             payload['_serein_anthropic_thinking'] = payload['thinking']
         converted = adapter._anthropic_payload_for_upstream(payload, {'upstream': model, 'upstream_model': model['model']})
+        if isinstance(payload.get('reasoning'), dict) and (
+                'deepseek' in str(model.get('base_url') or '').lower()
+                or 'deepseek' in str(model.get('model') or '').lower()):
+            converted['reasoning'] = payload['reasoning']
         # JSON schema is material for the authoring task on providers without a
         # compatible response_format. The host still validates the returned JSON.
         if payload.get('response_format'):

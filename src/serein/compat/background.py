@@ -21,7 +21,8 @@ def germany_config(settings):
     selected=task_model(settings.database,'relations')
     if selected:
         result['scene_linker']={**config.get('scene_linker',{}),'enabled':True,'auto_enabled':True,
-            'models':[{'name':'selected','model':selected['model'],'base_url':selected['base_url'],'api_key':''}]}
+            'models':[{'name':'selected','model':selected['model'],'base_url':selected['base_url'],
+                       'protocol':selected.get('protocol','openai'),'api_key':''}]}
     selected=task_model(settings.database,'dreams')
     if selected:
         result['dream']={**config.get('dream',{}),'enabled':True,'auto_enabled':True,
