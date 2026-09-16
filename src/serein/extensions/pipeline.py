@@ -10,13 +10,12 @@ from ..compat.events import Events, reference_blockers
 from .pipeline_rules import dialogue_units, dialogue_unit_is_complete, normalize_event_track_message_output, flushable_dialogue_units
 from . import pipeline_latest as latest
 from .pipeline_config import snapshot, execution
-from .pipeline_scenes import freeze_scene_context, verify_scene_context, SceneContextChanged
 from .pipeline_images import freeze_images, verify_images, bind_transcriptions, decision, expire_completed_media
 from . import pipeline_tracks as track_state
 
 ROLES=('track_router','event_curator','event_writer')
 TZ=timezone(timedelta(hours=8))
-CONTRACT='public-event-message-tracks-v2'
+CONTRACT='public-event-message-tracks-v3'
 
 
 def initialize(database):
@@ -111,10 +110,7 @@ def new_batch(database,include_recent,clock=None):
                 recent=[message(row) for row in store.conn.execute('SELECT * FROM raw_events WHERE source=? AND session_id=? AND id<? ORDER BY id DESC LIMIT 6',(source,session,eligible[0]['id']))][::-1]
                 data={'contract':CONTRACT,'input_policy':policy,'messages':stable,'parked':parked,'routing_messages':eligible,'tracks':tracks,'next_track_ordinal':ordinal,'scope':scope,'source':source,'recent':recent,'day':watermark.date().isoformat()}
                 key='pipeline:'+digest(encode(data))
-                while True:
-                    existing=store.conn.execute('SELECT status FROM pipeline_batches WHERE id=?',(key,)).fetchone()
-                    if existing and existing[0]=='superseded_scene_context':key+=':scene-refresh'
-                    else:break
+                existing=store.conn.execute('SELECT status FROM pipeline_batches WHERE id=?',(key,)).fetchone()
                 if existing:continue
                 store.conn.execute('INSERT INTO pipeline_batches(id,scope,input_json) VALUES (?,?,?)',(key,scope,encode(data)))
                 return dict(store.conn.execute('SELECT * FROM pipeline_batches WHERE id=?',(key,)).fetchone())
@@ -257,7 +253,6 @@ def request_for(database,batch,role,**fields):
                 track_cards=component['track_cards'],source_activity_roles={int(b['source_message_id']):b['activity_role'] for b in event['source_bindings']},
                 previous_events=[b for b in component['base_event_candidates'] if b['event_id'] in event['base_event_ids']],
                 track_context_events=component['base_event_candidates'])
-            prompt+='\n<existing_scenes_json>\n'+encode(component.get('existing_scenes',[]))+'\n</existing_scenes_json>'
             owned={m['id'] for m in fields['messages']};allowed={m['id'] for m in component['context_messages']}
             request['images']=[{**item,'evidence_role':'owned' if item['source_message_id'] in owned else 'context_only'} for item in component.get('images',[]) if item['source_message_id'] in allowed]
             request['curator_image_transcriptions']=[{**item,'evidence_role':'owned' if item['source_message_id'] in owned else 'context_only'} for item in component.get('curator_image_transcriptions',[]) if item['source_message_id'] in allowed]
@@ -436,7 +431,7 @@ def settle(database,batch,data,routed,plans):
             if bases:
                 item.update(supersedes_item_ids=[b['event_id'] for b in bases],expected_predecessors=[{'item_id':b['event_id'],'fingerprint':b['fingerprint'],
                     'source_keys':[dict(zip(('source_system','session_id','message_id'),source_key(ref))) for ref in b['source_refs']]} for b in bases])
-            items.append(item);details.append({'track_id':event['primary_track_id'],'writer':written,'curator_image_transcriptions':written.get('curator_image_transcriptions',[]),'existing_scene_receipts':[{k:scene[k] for k in ('scene_id','revision','body_sha256','matched_source_message_ids')} for scene in component['existing_scenes']],'source_activity_roles':{str(b['source_message_id']):b['activity_role'] for b in event['source_bindings']}})
+            items.append(item);details.append({'track_id':event['primary_track_id'],'writer':written,'curator_image_transcriptions':written.get('curator_image_transcriptions',[]),'source_activity_roles':{str(b['source_message_id']):b['activity_role'] for b in event['source_bindings']}})
             processed.update({key:'settled' for key in event['source_message_ids'] if key in all_new})
     assignments,tracks,_=route_result(data,routed)
     result={'status':'processed','batch_id':batch['id'],'completed_at':now(),'events':len(items),'processed_originals':len(processed),
@@ -445,7 +440,6 @@ def settle(database,batch,data,routed,plans):
             'deferred':len({source for _,plan,_ in plans for source in plan['defer_source_message_ids']}),
             'protected_deferrals':[entry for _,plan,_ in plans for entry in plan['hard_skips']]}
     def finish(conn):
-        for component,_,_ in plans:verify_scene_context(database,component,conn=conn)
         with latest.identity_scope(identity(database)):
             cards=routed.get('track_state_updates') or track_state.update_cards(data['tracks'],assignments,tracks,data['routing_messages'],data['scope'])
         track_state.persist(conn,cards,data['scope'])
@@ -496,7 +490,6 @@ async def _advance_frozen(database,*,include_recent=False,runner=None):
             data['components']=components(database,data,routed)
             with Store(database) as store:store.conn.execute('UPDATE pipeline_batches SET input_json=? WHERE id=?',(encode(data),batch['id']))
         for index,component in enumerate(data['components']):
-            freeze_scene_context(database,component)
             request=request_for(database,batch,'event_curator',component=component)
             with Store(database) as store:store.conn.execute('UPDATE pipeline_batches SET input_json=? WHERE id=?',(encode(data),batch['id']))
             output=await job(database,batch,request,f'event_curator:{index}',runner)
@@ -527,10 +520,6 @@ async def _advance_frozen(database,*,include_recent=False,runner=None):
                 event_results.append((event,written))
             plans.append((component,plan,event_results))
         return settle(database,batch,data,routed,plans)
-    except SceneContextChanged:
-        with Store(database) as store:
-            store.conn.execute("UPDATE pipeline_batches SET status='superseded_scene_context' WHERE id=? AND status='pending'",(batch['id'],))
-        raise
     except AwaitAgent as wait:return wait.task
 
 

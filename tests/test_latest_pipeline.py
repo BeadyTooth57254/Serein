@@ -92,6 +92,20 @@ def test_native_bridge_writer_contract_has_no_fixed_body_limit():
     assert '标题为空' in latest.validate_event_writer_result(output)
 
 
+def test_writer_prompt_examples_match_both_evidence_outcomes():
+    prompt=latest.build_event_writer_prompt('2025-01-01','',[{'id':1,'role':'user','content':'A book was returned'}])
+    samples=[json.loads(line) for line in prompt.splitlines() if line.startswith('{"evidence_sufficient":')]
+    assert len(samples)==2
+    sufficient,insufficient=samples
+    for sample in samples:
+        assert latest.validate_event_writer_result(sample)==[]
+    sufficient['recallable']=False
+    assert latest.validate_event_writer_result(sufficient)==[]
+    assert insufficient['evidence_sufficient'] is False and insufficient['recallable'] is False
+    assert insufficient['title']==insufficient['event_draft']==''
+    assert insufficient['kept_details']==insufficient['discarded_details']==[]
+
+
 @pytest.mark.parametrize('accepted',[False,True])
 def test_old_pending_evidence_job_is_bypassed_and_history_preserved(settings,accepted):
     from fastapi.testclient import TestClient
@@ -154,8 +168,7 @@ def test_identity_rendering_never_rewrites_source_words(settings):
     with latest.identity_scope(names):
         prompt=latest.build_event_writer_prompt('2025-01-01','',[{'id':1,'role':'user','content':original}])
     assert original in prompt and 'Nori' in prompt and 'Atlas' in prompt and '{ai_name}' not in prompt
-    assert 'Nori想用封面颜色整理虚构的图书馆目录' in prompt
-    assert 'Nori在社区手作课做的蓝色纸风车' in prompt
+    assert 'Nori把台灯送修' in prompt
 
 
 def test_configured_names_are_literal_values_not_recursive_templates(settings):
@@ -169,7 +182,7 @@ def test_configured_names_are_literal_values_not_recursive_templates(settings):
     # Freshly loaded Writer examples use the current saved instance names.
     save_settings(settings.database, {'identity':{'user_name':'NewReader','ai_name':'NewGuide'}})
     rules=p.rules('event_writer',settings.database)
-    assert 'NewReader在社区手作课' in rules and 'NewGuide' in rules
+    assert 'NewReader把台灯送修' in rules and 'NewGuide' in rules
 
 
 def test_images_keep_ownership_and_are_attached_to_model_payload(settings,monkeypatch):
