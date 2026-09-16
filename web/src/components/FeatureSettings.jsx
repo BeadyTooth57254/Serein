@@ -3,6 +3,7 @@ import {ResumeMemoryPicker} from './ResumeMemoryPicker.jsx';
 import {instanceSettings} from '../storage/instanceStore.js';
 
 const features = {
+  current_time:['当前日期时间','每个新用户轮次向聊天主模型注入所选时区的日期和时间；工具续轮沿用该轮时间。'],
   memos:['备忘','留给未来的话。到期时带入聊天；关闭后不注册备忘工具。'],
   persona:['心绪','记录并延续对话状态。请在“配置”页选择“心绪/防撤退”使用的模型。'],
   anti_retreat:['防撤退','使用“心绪/防撤退”模型，回复后异步判断、下一轮提示。同一窗口冷却 6 轮且至少 10 分钟。'],
@@ -18,13 +19,16 @@ const features = {
   resume:['开窗续接（resume）','新窗口或发送 /resume 时，按下面的选择带入内容。'],
 };
 
+const fallbackTimeZones = ['Asia/Shanghai','UTC','Asia/Tokyo','Asia/Singapore','Europe/London','Europe/Berlin','America/New_York','America/Chicago','America/Denver','America/Los_Angeles','Australia/Sydney'];
+const timeZones = [...new Set([...fallbackTimeZones,...(Intl.supportedValuesOf?.('timeZone')||[])])];
+
 export function FeatureSettings({onOpenSummary,onOpenEventGuide}) {
-  const [values,setValues]=useState(null),[selection,setSelection]=useState({}),[status,setStatus]=useState(''),[busy,setBusy]=useState(false),[autoEnabled,setAutoEnabled]=useState(false);
-  useEffect(()=>{let active=true;instanceSettings().then(value=>{if(active){setValues(value.features);setSelection(value.resume);setAutoEnabled(value.pipeline.auto_enabled!==false);}})
+  const [values,setValues]=useState(null),[selection,setSelection]=useState({}),[clock,setClock]=useState({timezone:'Asia/Shanghai'}),[status,setStatus]=useState(''),[busy,setBusy]=useState(false),[autoEnabled,setAutoEnabled]=useState(false);
+  useEffect(()=>{let active=true;instanceSettings().then(value=>{if(active){setValues(value.features);setSelection(value.resume);setClock(value.clock);setAutoEnabled(value.pipeline.auto_enabled!==false);}})
     .catch(error=>{if(active)setStatus(error.message);});return()=>{active=false;};},[]);
   async function save(event) {
     event.preventDefault();setBusy(true);
-    try {const result=await instanceSettings({features:values,resume:selection,pipeline:{auto_enabled:autoEnabled}});setValues(result.features);setSelection(result.resume);setStatus('已保存并生效。已有内容会保留。');}
+    try {const result=await instanceSettings({features:values,resume:selection,clock,pipeline:{auto_enabled:autoEnabled}});setValues(result.features);setSelection(result.resume);setClock(result.clock);setStatus('已保存并生效。已有内容会保留。');}
     catch(error){setStatus(error.message);}finally{setBusy(false);}
   }
   return <section className="settings-group"><div className="settings-group__heading"><h3>可选功能</h3><p>按需开启，保存后生效。</p></div>
@@ -36,6 +40,9 @@ export function FeatureSettings({onOpenSummary,onOpenEventGuide}) {
       {Object.entries(features).map(([key,[label,help]])=><label className="settings-toggle" key={key}>
       <span><strong>{label}</strong><small>{help}</small></span><input type="checkbox" role="switch" aria-label={label} disabled={busy} checked={!!values[key]}
         onChange={event=>setValues(current=>({...current,[key]:event.target.checked}))}/></label>)}
+      {values.current_time&&<label className="settings-field time-context-zone"><span>时间戳时区</span><select disabled={busy} value={clock.timezone}
+        onChange={event=>setClock({timezone:event.target.value})}>{timeZones.map(zone=><option value={zone} key={zone}>{zone}</option>)}</select>
+        <small>默认 Asia/Shanghai（东八区）；注入内容也会写明当时的 UTC 偏移。</small></label>}
       {values.resume&&<fieldset className="resume-selection"><legend>每次开窗读取</legend>
         <p>只读最新一份窗影；事件和 Scene 附记忆 ID，可用 read_memory 继续阅读绑定的原文。Event 和 Scene 都可以收藏；这里的收藏续接选项仍只读取 Scene，也可以单独选择事件。“最近原话”和“尚未整理的原话”只能开启一个。</p>
         {Object.entries({latest_shadow:'最新窗影',recent_events:'最近 10 条事件（含记忆 ID）',favorite_scenes:'舍不得丢的 Scene',selected_memories:'自选事件 / Scene',recent_originals:'最近原话',pending_originals:'尚未整理的原话'}).map(([key,label])=>

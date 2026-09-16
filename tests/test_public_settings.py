@@ -25,6 +25,19 @@ def configure(client, **upstream):
                    'assignments':{'chat':'model-a','writer':'model-a'},'upstream':{'writer_enabled':True,**upstream}})
 
 
+def test_current_time_defaults_and_timezone_validation(deployment):
+    settings,client=deployment
+    initial=client.get('/v1/settings').json()
+    assert initial['features']['current_time'] is False
+    assert initial['clock']=={'timezone':'Asia/Shanghai'}
+    saved=client.patch('/v1/settings',json={'features':{'current_time':True},'clock':{'timezone':'Europe/Berlin'}})
+    assert saved.status_code==200,saved.text
+    assert saved.json()['features']['current_time'] is True
+    assert saved.json()['clock']=={'timezone':'Europe/Berlin'}
+    assert read_settings(settings.database)['clock']=={'timezone':'Europe/Berlin'}
+    assert client.patch('/v1/settings',json={'clock':{'timezone':'Not/A_Timezone'}}).status_code==422
+
+
 def test_passage_settings_are_optional_strict_and_independent(deployment):
     from serein.configured_models import recall_settings
     from serein.deployment import save_settings
@@ -253,6 +266,12 @@ def test_proxy_worldbook_is_not_a_recall_query_but_still_reaches_upstream(deploy
 def test_proxy_replays_prefix_and_reasoning_on_tool_continuation(deployment,monkeypatch):
     settings,client=deployment
     assert configure(client).is_success
+    assert client.patch('/v1/settings',json={'features':{'current_time':True},'clock':{'timezone':'Asia/Shanghai'}}).is_success
+    clock_calls=[]
+    def clock_context(timezone):
+        clock_calls.append(timezone)
+        return 'Serein current date and time: 2026-09-16T12:34:56+08:00 (Asia/Shanghai).'
+    monkeypatch.setattr('serein.api.chat.current_time_context',clock_context)
     calls=[]
     async def complete(model,payload,**options):
         calls.append(json.loads(json.dumps(payload)))
@@ -271,9 +290,36 @@ def test_proxy_replays_prefix_and_reasoning_on_tool_continuation(deployment,monk
         json={**body,'messages':[*original,assistant,{'role':'tool','tool_call_id':'tool-a','content':'book list'}]})
     assert second.status_code==200
     assert second.headers['x-serein-context-replayed']=='true'
+    assert clock_calls==['Asia/Shanghai']
+    assert '2026-09-16T12:34:56+08:00' in calls[0]['messages'][-1]['content']
     assert calls[1]['messages'][:len(calls[0]['messages'])]==calls[0]['messages']
     assert calls[1]['messages'][-2]['reasoning_content']=='retained reasoning'
     assert 'message_insert_extra_bundle' in original[-1]['content']
+
+
+def test_current_time_only_reaches_chat_context_not_raw_archive(deployment,monkeypatch):
+    from serein.core.store import Store
+    settings,client=deployment
+    assert configure(client).is_success
+    forwarded=[]
+    async def complete(model,payload,**options):
+        forwarded.append(payload['messages'][-1]['content'])
+        return {'choices':[{'message':{'role':'assistant','content':'Synthetic reply'}}]}
+    monkeypatch.setattr('serein.api.chat.complete',complete)
+    monkeypatch.setattr('serein.api.chat.current_time_context',
+        lambda timezone:f'Serein current date and time: 2026-09-16T06:07:08+09:00 ({timezone}).')
+    off=client.post('/v1/chat/completions',headers={'X-Serein-Window-ID':'clock-off'},
+        json={'messages':[{'role':'user','content':'Clock question off'}]})
+    assert off.status_code==200 and 'Serein current date and time' not in forwarded[-1]
+    client.patch('/v1/settings',json={'features':{'current_time':True},'clock':{'timezone':'Asia/Tokyo'}}).raise_for_status()
+    on=client.post('/v1/chat/completions',headers={'X-Serein-Window-ID':'clock-on'},
+        json={'messages':[{'role':'user','content':'Clock question on'}]})
+    assert on.status_code==200
+    assert '2026-09-16T06:07:08+09:00 (Asia/Tokyo)' in forwarded[-1]
+    with Store(settings.database,read_only=True) as store:
+        archived='\n'.join(row[0] for row in store.conn.execute('SELECT text FROM raw_events ORDER BY id'))
+    assert 'Clock question on' in archived
+    assert 'Serein current date and time' not in archived
 
 
 def test_streaming_usage_and_tool_deltas_survive(deployment,monkeypatch):

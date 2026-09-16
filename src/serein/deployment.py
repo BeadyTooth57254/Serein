@@ -6,12 +6,14 @@ import os
 from copy import deepcopy
 from urllib.parse import urlsplit
 from uuid import uuid4, uuid5, NAMESPACE_URL
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from .core.store import Store, encode, Conflict, now
 
 DEFAULT_IDENTITY = {'user_name': 'User', 'ai_name': 'AI'}
 DEFAULT_UPSTREAM = {'base_url': '', 'model': '', 'writer_model': '', 'api_key': '',
                     'writer_enabled': False, 'memory_enabled': False, 'operit_enabled': True}
-DEFAULT_FEATURES = {'memos':False, 'persona':False, 'anti_retreat':False, 'window_shadows':False, 'association':False, 'write_context':False, 'relations_auto_accept':False, 'resume':False, 'originals':False, 'favorites':False, 'narrative_tools':False, 'event_to_scene':False, 'index_sync_tool':False}
+DEFAULT_FEATURES = {'memos':False, 'persona':False, 'anti_retreat':False, 'window_shadows':False, 'association':False, 'write_context':False, 'relations_auto_accept':False, 'resume':False, 'originals':False, 'favorites':False, 'narrative_tools':False, 'event_to_scene':False, 'index_sync_tool':False, 'current_time':False}
+DEFAULT_CLOCK = {'timezone':'Asia/Shanghai'}
 DEFAULT_RESUME = {'latest_shadow':True, 'recent_events':True, 'favorite_scenes':True, 'selected_memories':False, 'selected_ids':[],
                   'recent_originals':False, 'recent_original_limit':20, 'pending_originals':True}
 DEFAULT_DOMAINS = [
@@ -34,6 +36,7 @@ def read_from_store(store):
     return {'settings_version':saved.get('settings_version',0), 'identity': {**DEFAULT_IDENTITY, **saved.get('identity', {})},
             'upstream': {**DEFAULT_UPSTREAM, **saved.get('upstream', {})},
             'features': {**DEFAULT_FEATURES, **saved.get('features', {})},
+            'clock': {**DEFAULT_CLOCK, **saved.get('clock', {})},
             'recall': saved.get('recall', {}),
             'resume': {key:saved.get('resume', {}).get(key, value) for key,value in DEFAULT_RESUME.items()},
             'models': saved.get('models', []), 'upstreams': saved.get('upstreams', []),
@@ -149,6 +152,10 @@ def save_settings(database, changes):
             threshold = current['recall'].get(key)
             if key in current['recall'] and (type(threshold) not in (int, float) or not math.isfinite(threshold) or not 0 <= threshold <= 1):
                 raise ValueError('Recall threshold must be a finite number between 0 and 1')
+        try:
+            ZoneInfo(current['clock']['timezone'])
+        except (KeyError, TypeError, ValueError, ZoneInfoNotFoundError):
+            raise ValueError('Unknown time zone') from None
         from .recall.policy import RecallPolicy
         RecallPolicy.from_config(current['recall'])
         current['assignments'].pop('anti_retreat',None)

@@ -7216,8 +7216,11 @@ label:has(input:focus-visible) {
 .model-assignments { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 22px; }
 .settings-group > form > .settings-toggle { padding: 16px 0; border-bottom: 1px solid var(--line); }
 .settings-group > form > .settings-toggle small { max-width: 560px; }
+.time-context-zone { display: grid; grid-template-columns: minmax(110px, .35fr) minmax(220px, 1fr); align-items: center; gap: 8px 18px; padding: 14px 0 18px; border-bottom: 1px solid var(--line); }
+.time-context-zone > span { font-size: 13px; }
+.time-context-zone > small { grid-column: 2; color: var(--muted); font-size: 11px; line-height: 1.55; }
 .model-connection-help { color: var(--faint); font-size: 12px; line-height: 1.7; }
-@media (max-width: 600px) { .model-assignments { grid-template-columns: 1fr; } }
+@media (max-width: 600px) { .model-assignments, .time-context-zone { grid-template-columns: 1fr; } .time-context-zone > small { grid-column: 1; } }
 .app-shell--settings > .sidebar { position: fixed; opacity: 1; visibility: visible; }
 .help-page > .sidebar { position: fixed; opacity: 1; visibility: visible; }
 @media (max-width: 700px) {

@@ -4,6 +4,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from ..deployment import read_settings, save_settings, TASKS, DEFAULT_FEATURES, DEFAULT_RESUME
 from typing import Literal
 from datetime import date
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
 def api_base(value):
@@ -165,6 +166,19 @@ class DreamPatch(BaseModel):
     daily_probability: float | None = Field(default=None, ge=0, le=1)
 
 
+class ClockPatch(BaseModel):
+    model_config = ConfigDict(extra='forbid', str_strip_whitespace=True)
+    timezone: str | None = Field(default=None, min_length=1, max_length=100)
+
+    @field_validator('timezone')
+    @classmethod
+    def known_timezone(cls, value):
+        if value is None:return value
+        try:ZoneInfo(value)
+        except (ValueError, ZoneInfoNotFoundError):raise ValueError('Unknown time zone') from None
+        return value
+
+
 class PipelinePatch(BaseModel):
     auto_enabled: bool | None = None
     execution_mode: Literal['legacy','api','agent'] | None = None
@@ -202,6 +216,7 @@ class SettingsPatch(BaseModel):
     resume: ResumePatch | None = None
     tagging: TaggingPatch | None = None
     dream: DreamPatch | None = None
+    clock: ClockPatch | None = None
     pipeline: PipelinePatch | None = None
     recall: RecallPatch | None = None
 

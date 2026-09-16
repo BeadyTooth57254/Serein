@@ -113,7 +113,7 @@ export function UsageGuide({ onOpenSettingsTab, initialPage }) {
         <li>在<SettingsLink tab="appearance" onOpen={onOpenSettingsTab}>外观设置</SettingsLink>填写你和 AI 的名字。</li>
         <li>在<SettingsLink tab="models" onOpen={onOpenSettingsTab}>模型</SettingsLink>添加上游地址、密钥和模型名，再到<SettingsLink tab="configuration" onOpen={onOpenSettingsTab}>配置</SettingsLink>为打标、嵌入、重排等任务选择模型。通过 HTTP 地址访问网页时，也可以添加上游和模型；旧版按钮无反应时，升级并刷新页面后重试。</li>
         <li>首次配置或更换 Embedding 后，先保存，再点击“建立 / 补齐检索索引”，完成后开启自动记忆。日常存记忆不用每次按；重复点击仍会重新计算路由向量并扫描索引，有模型调用和服务器开销。详见“长文分段”页的按钮说明。</li>
-        <li>在<SettingsLink tab="features" onOpen={onOpenSettingsTab}>功能</SettingsLink>按需开启心绪、备忘、窗影、原话查阅、收藏工具和开窗续接。聊天记录与 Operit 备份在<SettingsLink tab="imports" onOpen={onOpenSettingsTab}>对话导入</SettingsLink>处理；Ombre 旧库到<SettingsLink tab="migration" onOpen={onOpenSettingsTab}>旧库迁移</SettingsLink>。</li>
+        <li>在<SettingsLink tab="features" onOpen={onOpenSettingsTab}>功能</SettingsLink>按需开启当前日期时间、心绪、备忘、窗影、原话查阅、收藏工具和开窗续接。当前日期时间默认使用 Asia/Shanghai，也可另选时区。聊天记录与 Operit 备份在<SettingsLink tab="imports" onOpen={onOpenSettingsTab}>对话导入</SettingsLink>处理；Ombre 旧库到<SettingsLink tab="migration" onOpen={onOpenSettingsTab}>旧库迁移</SettingsLink>。</li>
       </ol>
       <h4>主窗口保存 Scene</h4>
       <p><code>write_scene</code> 只必填正文 <code>content</code> 和检索线索 <code>cues</code>（1–8 条，每条最多 80 字符）。标题、日期和主域可选；编号由程序生成，无须填写 operation_id。默认不绑原话，明确要求引用时才传 evidence_refs。响应丢失时先读回确认，避免重复新建。</p>
