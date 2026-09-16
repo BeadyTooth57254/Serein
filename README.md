@@ -4,7 +4,7 @@
 
 Serein 是一个可自行部署、面向个人使用的 AI 记忆服务。它提供网页、聊天 API 网关和 MCP 工具，让不同聊天窗口读写同一份记忆。公开版从空库开始，不附带私人记忆或模型密钥。
 
-[功能](#功能) · [记忆怎么存](#记忆怎么存) · [Scene 与 Event](#scene-与-event) · [怎么召回](#怎么召回) · [Hook 接入](#hook-接入已有聊天宿主) · [Codex 换窗](#codex-换窗包自建前后端) · [召回格式](#召回的是什么格式) · [Arc／叙事卷](#arc与叙事卷) · [自动摘要](#自动摘要) · [论文](#设计与论文) · [雨夜花园](#雨夜花园) · [安装](#一键脚本与开始使用)
+[功能](#功能) · [记忆怎么存](#记忆怎么存) · [Scene 与 Event](#scene-与-event) · [怎么召回](#怎么召回) · [Hook 接入](#hook-接入已有聊天宿主) · [召回格式](#召回的是什么格式) · [日记与暗房](#日记与暗房) · [Arc／叙事卷](#arc与叙事卷) · [自动摘要](#自动摘要) · [换窗](#换窗窗影与-resume) · [可选功能](#其他可选功能) · [论文](#设计与论文) · [雨夜花园](#雨夜花园) · [安装](#一键脚本与开始使用)
 
 ## 功能
 
@@ -15,11 +15,9 @@ Serein 是一个可自行部署、面向个人使用的 AI 记忆服务。它提
 | 把长期经历连起来 | 按主题收集材料，建立 Arc，逐步写成叙事卷 |
 | 管理自己的资料 | 网页阅读、编辑、收藏、归档；导入旧库、导出正文和下载数据库备份 |
 | 接着上一窗聊 | 用 `/resume` 带入选定的窗影、记忆等接续资料 |
-| 留下别的东西 | 日记、心绪、备忘、梦境，以及雨夜花园 |
+| 留下别的东西 | 日记与暗房、心绪、备忘、梦境，以及雨夜花园 |
 
 可选功能按需开启；模型在“设置 → 模型”中添加，再到“配置”页选择各功能使用的模型。使用说明位于侧栏的 **圆圈问号**。
-
-梦境在每天凌晨 4 点后按可配置概率尝试生成，读取最近新建的最多 5 条 Event／Scene；没有时才读新日记。它只提取意象，不把召回、修改记录或固定“自我锚点”当材料。
 
 ## 记忆怎么存
 
@@ -85,12 +83,6 @@ Serein 只能读到已进入实例的资料。聊天客户端接上 MCP，并不
 
 可直接参考 [Python Hook 宿主示例](examples/hook_host.py) 和 [接入步骤、请求格式](docs/hook-integration.md)。只连接 MCP 的客户端仍需主动调用工具；需要 Serein 自动完成模型调用与注入时，使用上面的聊天网关。
 
-## Codex 换窗包（自建前后端）
-
-如果聊天界面、后端和会话切换都由你自己管理，可以让后端读取 Serein 的结构化续接资料，再通过 Codex App Server 新建 thread 并预装最新窗影、Scene、Event 和所选原话。这是**自建前后端的接入示例**，不会让 Serein 网页直接控制 Codex，也不需要改写 Codex 的会话文件。
-
-原话会保留原来的 `user` / `assistant` 角色，并随正文带上可供 Serein 精确读回的原文 ID（如 `raw:42`）；若来源提供上游消息 ID，也一并保留为 `source_message_id`。完整流程、安全边界和可运行脚本见 [Codex 换窗包接入说明](docs/codex-continuity-packet.md) 与 [示例目录](examples/codex-continuity-packet/README.md)。
-
 ## 召回的是什么格式
 
 聊天模型收到的是带有**类型、记忆 ID、标题和正文内容**的文本块。日期信息在有记录时附上；较长的正文会受到本轮上下文长度限制，需要时再读取完整内容。
@@ -126,6 +118,14 @@ Event 使用同样的文本块结构，`ref` 以 `event:` 开头。没有明确�
 | 按关键词、日期或说话者找原话 | `source_message_search`，查到后用 `source_message_read` 按原话 ID 读取，可带前后消息 |
 
 原话查阅需开启对应功能；没有绑定的原话不会被凭空补出。Arc 的材料编号要从当前目录复制，**编号不等于材料 ID，也不等于材料总数**。长结果按工具返回的游标继续读取。字段与分页约定见 [工具说明](docs/public-feature-contracts.md)。
+
+## 日记与暗房
+
+日记与 Scene／Event 分开保存，可以在网页按日期阅读，也可以用 `read_diary`、`write_diary`、`revise_diary`、`comment_diary` 和 `delete_diary` 管理。修订、评论和软删除都有记录；日记不参加普通的 Scene／Event 自动召回，也不能收藏，需要时由网页或工具明确读取。
+
+写日记时设置未来的 `unlock_at`，它会成为暗房日记。解锁前正文保持锁定，不能读取、修订、评论或删除；到达解锁时间后按普通日记读取。日记和已解锁的暗房内容可以成为叙事卷材料；近期没有 Event／Scene 时，新日记也可以作为梦境材料。
+
+工具参数、锁定边界与写入约定见 [功能与工具约定](docs/public-feature-contracts.md#日记与暗房)。
 
 ## Arc与叙事卷
 
@@ -168,6 +168,31 @@ Track 不设按时间删除的期限。每次归线默认只读取同一来源�
 自动摘要可能误分、误合、遗漏重点，也可能写错人物归属、时间或因果。原话可追溯和自检通过都不能保证正文完全准确；可以对照原话手动修订。暂未生成也不一定是丢失：材料可能仍在等待上下文、受保护或执行失败，可到流水线查看处理记录。
 
 详细配置、图片处理、失败恢复与保护规则见 [自动 Event 说明](docs/automatic-events.md)。
+
+## 换窗：窗影与 `/resume`
+
+窗影由当前聊天主模型在换窗前明确写下，分成“我眼中的你”“我眼中的自己”和“这一窗发生的事”。它保存这一窗的视角，不生成 Scene，也不进入普通向量召回；关闭窗影功能会停用写入工具，但不会删除已有内容。
+
+开窗续接是另一项独立开关。可以选择最新窗影、最近 10 条 Event、收藏的 Scene、自选 Event／Scene，以及最近或尚未整理的原话；新窗口使用独立的 `X-Serein-Window-ID`，再在经过 Serein 网关的聊天中发送 `/resume`。只有勾选的材料会在这次明确触发后进入上下文，不会整库注入，也不会额外运行一次语义召回。`/resume` 是聊天指令，不是 MCP 工具。
+
+如果聊天界面、后端和换窗动作都由自己管理，还可以读取同一份结构化续接资料，通过 Codex App Server 新建 thread 并预装所选内容。这个示例不会让 Serein 网页直接控制 Codex，也不改写 Codex 会话文件；见 [Codex 换窗包接入说明](docs/codex-continuity-packet.md) 与 [示例目录](examples/codex-continuity-packet/README.md)。
+
+## 其他可选功能
+
+这些能力默认按需配置或开启；关闭后停止后续调用或注入，已经保存的内容仍然保留。
+
+| 功能 | 开启后发生什么 |
+| --- | --- |
+| 备忘 | 保存“留给未来的话”，按日期、轮次、早晚或次数限制，在符合条件的下一次聊天里带入；它不是 Scene／Event，也不是主动通知服务 |
+| 梦境 | 选择梦境模型后，可设置每日概率和最长 40000 字符的“梦境 · 主模型 Prompt”；每天凌晨 4 点后尝试一次，优先读取最近 48 小时新建的最多 5 条 Event／Scene，没有时才读新日记 |
+| 心绪／防撤退 | 两者共用所选模型但开关独立；心绪按窗口保存状态和变化，只在心绪页展示；防撤退在完整回复后异步判断，命中时按冷却规则在下一轮带入一次提示 |
+| 联想 | 从直接候选已经确认的 Scene 关系中最多补一条 Scene 参加同一次重排；它只增加候选，不保送，也不绕过最终门槛 |
+| 收藏工具 | 网页始终可以收藏 Event／Scene；开启工具后，聊天模型才能读取、收藏或取消收藏，收藏本身不改变召回分数或冷却 |
+| 原话查阅 | 注册 `source_message_search` 和 `source_message_read`，可按文字、日期、说话者查找，再按原话 ID 读全文和同会话前后文；读取不等于注入 |
+| 当前日期时间 | 在每个新用户轮给主模型附上所选时区的时间；不写入原话档案，也不进入召回、Writer 或打标 |
+| 写入时找前情 | 新建 Scene 后最多提示一条可能相关的旧 Scene 及其 Arc；只返回候选，不自动建关系或加入 Arc |
+
+“Event 升为 Scene”“主模型读写叙事卷”和“关系提案自动通过”也各有独立开关，分别保留前面的写入、预览和证据校验边界。完整开关、注入条件与工具参数见 [功能与工具约定](docs/public-feature-contracts.md)；备忘、心绪与防撤退的细节见 [陪伴功能说明](docs/companion.md)。
 
 ## 设计与论文
 
@@ -274,7 +299,7 @@ bash scripts/one_click.sh
 | 读取卷内材料 | `read_arc_materials` | 基础读取；含上传材料，支持目录编号选择与分页 |
 | 保存与管理记忆 | `write_scene`、`edit_scene`、`set_scene_status`、`set_memory_state`、`annotate` | 可写实例；分别新建 Scene、局部修改 Scene、管理状态与自动浮现资格；收藏修改另需开启收藏工具。自动 Event 正文由摘要流水线维护 |
 | 记忆候选 | `propose_memory`、`list_candidates`、`review_memory` | 可写实例；提出、接受 Scene 候选，未接受的候选不作为正式记忆召回；历史 Event / Narrative 候选可查看或忽略，不在此接受 |
-| 日记与暗室 | `read_diary`、`write_diary`、`revise_diary`、`comment_diary`、`delete_diary` | 可写实例；写条目、评论和软删除，保留作者与暗室解锁约束 |
+| 日记与暗房 | `read_diary`、`write_diary`、`revise_diary`、`comment_diary`、`delete_diary` | 可写实例；写条目、评论和软删除，保留作者与暗房解锁约束 |
 | 自动摘要 Agent | `pipeline_next`、`pipeline_submit` | 暴露给自动摘要专用 Agent 的 MCP 任务协议，不是主聊天模型的日常工具，也可由 `mcp_tools` 白名单隐藏；仅限可写实例，负责领取冻结任务、提交结果，具体执行方式见 [扩展说明](docs/extensions.md) |
 
 `write_scene` 按自用版方式调用，只必填 `content` 和 `cues`（1–8 条，每条最多 80 字符）；`title`、`date`、`domain` 可选，默认不绑定证据。ID 和内部操作编号自动生成。`edit_scene` 传 `scene_id`、读回的 `expected_updated_at` 和要改的 title/content/cues。日记恢复独立的 `read_diary`、`write_diary`、`revise_diary`、`comment_diary`、`delete_diary`，批注使用 `annotate`。新工具不需要模型管理 operation_id 或数字版本号；响应丢失时先读回确认，避免重复新建。完整 rc65 旧参数仍保留内部兼容。升级后刷新工具列表。叙事卷和 Event 各自的写入边界不变。
@@ -296,7 +321,7 @@ bash scripts/one_click.sh
 
 ## 更多文档
 
-[功能与工具约定](docs/public-feature-contracts.md) · [扩展与 Writer](docs/extensions.md) · [记忆保存与读取](docs/memory-storage.md) · [叙事卷](docs/narratives.md)
+[功能与工具约定](docs/public-feature-contracts.md) · [备忘、心绪与防撤退](docs/companion.md) · [扩展与 Writer](docs/extensions.md) · [记忆保存与读取](docs/memory-storage.md) · [叙事卷](docs/narratives.md)
 
 
 打标失败后不再自动重复请求；原文与成功结果保留。错误会区分上游 HTTP 状态、超时、JSON 格式与字段校验，支持完整 JSON 代码框。升级后先用“先重试 1 条”核对配置和结果，再决定是否重试其余失败项；模型返回后校验失败也可能已经计费。

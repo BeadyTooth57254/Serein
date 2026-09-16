@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
-const tabs = [["start", "开始"], ["favorites", "收藏"], ["connect", "接入"], ["source", "原话"], ["install", "一键安装"], ["migration", "迁移"], ["passages", "长文分段"], ["events", "自动 Event"]];
+const tabs = [["start", "开始"], ["features", "日记与功能"], ["favorites", "收藏"], ["connect", "接入"], ["source", "原话"], ["install", "一键安装"], ["migration", "迁移"], ["passages", "长文分段"], ["events", "自动 Event"]];
 const settings = { appearance: "外观", features: "功能", models: "模型", configuration: "配置", imports: "对话导入", migration: "旧库迁移" };
 const hookSnippet = `\`\`\`python
 from examples.hook_host import SereinHook
@@ -113,7 +113,7 @@ export function UsageGuide({ onOpenSettingsTab, initialPage }) {
         <li>在<SettingsLink tab="appearance" onOpen={onOpenSettingsTab}>外观设置</SettingsLink>填写你和 AI 的名字。</li>
         <li>在<SettingsLink tab="models" onOpen={onOpenSettingsTab}>模型</SettingsLink>添加上游地址、密钥和模型名，再到<SettingsLink tab="configuration" onOpen={onOpenSettingsTab}>配置</SettingsLink>为打标、嵌入、重排等任务选择模型。通过 HTTP 地址访问网页时，也可以添加上游和模型；旧版按钮无反应时，升级并刷新页面后重试。</li>
         <li>首次配置或更换 Embedding 后，先保存，再点击“建立 / 补齐检索索引”，完成后开启自动记忆。日常存记忆不用每次按；重复点击仍会重新计算路由向量并扫描索引，有模型调用和服务器开销。详见“长文分段”页的按钮说明。</li>
-        <li>在<SettingsLink tab="features" onOpen={onOpenSettingsTab}>功能</SettingsLink>按需开启当前日期时间、心绪、备忘、窗影、原话查阅、收藏工具和开窗续接。当前日期时间默认使用 Asia/Shanghai，也可另选时区。聊天记录与 Operit 备份在<SettingsLink tab="imports" onOpen={onOpenSettingsTab}>对话导入</SettingsLink>处理；Ombre 旧库到<SettingsLink tab="migration" onOpen={onOpenSettingsTab}>旧库迁移</SettingsLink>。</li>
+        <li>在<SettingsLink tab="features" onOpen={onOpenSettingsTab}>功能</SettingsLink>按需开启各项能力；“日记与功能”页说明哪些内容只保存、哪些会进入候选，以及哪些会明确带入聊天。当前日期时间默认使用 Asia/Shanghai，也可另选时区。聊天记录与 Operit 备份在<SettingsLink tab="imports" onOpen={onOpenSettingsTab}>对话导入</SettingsLink>处理；Ombre 旧库到<SettingsLink tab="migration" onOpen={onOpenSettingsTab}>旧库迁移</SettingsLink>。</li>
       </ol>
       <h4>主窗口保存 Scene</h4>
       <p><code>write_scene</code> 只必填正文 <code>content</code> 和检索线索 <code>cues</code>（1–8 条，每条最多 80 字符）。标题、日期和主域可选；编号由程序生成，无须填写 operation_id。默认不绑原话，明确要求引用时才传 evidence_refs。响应丢失时先读回确认，避免重复新建。</p>
@@ -125,12 +125,28 @@ export function UsageGuide({ onOpenSettingsTab, initialPage }) {
       <p>修订箱每天凌晨四点后由程序检查已有 Arc 的关联材料是否比卷的发布时间更新，不用为修订箱选模型。旧版模型生成的待处理成卷候选会在下次扫描时退出队列，历史内容保留。要开启新主题，在叙事卷页输入主题手动找材料；这一步才使用<SettingsLink tab="configuration" onOpen={onOpenSettingsTab}>配置页</SettingsLink>里的“叙事卷找材料”模型。</p>
     </section>
     <section className="settings-group usage-guide__page" {...page(1)}>
+      <div className="settings-group__heading"><h3>日记、暗房与可选功能</h3><p>这些内容的保存、候选和注入边界彼此独立。</p></div>
+      <h4>日记与暗房</h4>
+      <p>日记在侧栏单独阅读，也可用 <code>read_diary</code>、<code>write_diary</code>、<code>revise_diary</code>、<code>comment_diary</code> 和 <code>delete_diary</code> 管理。它不参加普通 Scene／Event 自动召回，也不能收藏；需要时由网页或工具明确读取。日记可以作为叙事卷材料，近期没有新 Event／Scene 时也可能成为梦境材料。</p>
+      <p>新建日记时把 <code>unlock_at</code> 设为未来时间，就会成为暗房日记。到期前正文不可读，也不能修订、评论或删除；解锁后按普通日记使用。暗房是 Serein 接口层的锁定约束，不等于对数据库备份加密。</p>
+      <h4>换窗：窗影与 /resume</h4>
+      <p>“窗影”让当前主模型在换窗前写下“我眼中的你”“我眼中的自己”和“这一窗发生的事”；它不生成 Scene，也不进入普通向量召回。“开窗续接”是另一个开关，可以勾选最新窗影、最近 Event、收藏 Scene、自选 Event／Scene，以及最近或尚未整理的原话。</p>
+      <p>新窗口使用独立的 <code>X-Serein-Window-ID</code>，在经过 Serein 网关的聊天中发送 <code>/resume</code> 后，只把勾选内容明确带入；不会整库注入，也不会额外运行语义召回。仅连接 MCP 不处理这条指令。</p>
+      <h4>备忘、梦境、心绪与防撤退</h4>
+      <p>备忘是“留给未来的话”，可按日期、轮次、早晚和次数限制在符合条件的聊天里带入；它不是主动通知，也不写成 Scene／Event。梦境在<SettingsLink tab="configuration" onOpen={onOpenSettingsTab}>配置页</SettingsLink>选择模型，可设置每日概率和“梦境 · 主模型 Prompt”；凌晨四点后按日尝试，优先读取最近 48 小时新建的最多五条 Event／Scene，没有时才读新日记。</p>
+      <p>心绪和防撤退共用所选模型，但开关独立。心绪按窗口保存状态和变化，只在心绪页展示，不注入后续聊天；防撤退在完整回复后异步判断，命中后按六轮且至少十分钟的冷却，在下一轮带入一次提示。</p>
+      <h4>联想、收藏工具与原话查阅</h4>
+      <p>联想沿已确认的 Scene 关系最多补一条候选，仍参加同一次重排并通过最终门槛，不会直接注入。页面收藏不依赖工具开关；开启“收藏工具”后，AI 才能读取、收藏或取消收藏 Event／Scene。开启“原话查阅”后，AI 才能按文字、日期、说话者搜索原话，再按 ID 读取全文和同会话前后文；显式读取不等于已经注入聊天。</p>
+      <h4>其余独立开关</h4>
+      <p>当前日期时间只附在当轮用户消息后，不进入原话档案或记忆流水线；“写入时找前情”在 Scene 保存成功后最多返回一条旧 Scene 提示，不建关系或加入 Arc；“关系提案自动通过”仍执行正文、证据和端点校验。“Event 升为 Scene”及“主模型读写叙事卷”保留各自的读取、预览和版本检查。关闭任一功能会停止后续调用或注入，已有内容仍保留。</p>
+    </section>
+    <section className="settings-group usage-guide__page" {...page(2)}>
       <div className="settings-group__heading"><h3>收藏的记忆</h3></div>
       <p>Event 和 Scene 详情都可点击“收藏”，在各自的“舍不得丢的”视图查看，归档的收藏也会保留。取消收藏不删除记忆。</p>
       <p>开启“收藏工具”后，客户端刷新工具列表即可使用 <code>read_favorites</code>。默认读取两类收藏的全文，每页 5 条；<code>kind</code> 可填 <code>event</code> 或 <code>scene</code>，用 <code>limit</code> 和 <code>offset</code> 分页。默认不包含归档收藏，传 include_archived 可读取，<code>with_evidence</code> 可附原文证据。读取不影响自动召回和冷却。</p>
       <p>AI 可在 <code>write_scene</code> 中传 <code>favorite: true</code> 随正文一起收藏；旧记忆用 <code>set_memory_state</code>，传记忆 ID、当前版本和 <code>favorite</code>，无需重写正文。<code>true</code> 收藏、<code>false</code> 取消，不传保持原样。需要实例允许写入；关闭“收藏工具”会禁止 AI 修改收藏，但页面仍可使用。</p>
     </section>
-    <section className="settings-group usage-guide__page" {...page(2)}>
+    <section className="settings-group usage-guide__page" {...page(3)}>
       <div className="settings-group__heading"><h3>连接 MCP 与聊天 API</h3></div>
       <p>以下是连接地址模板，请把“公网IP”“网关端口”或“你的域名”替换成自己的实际值。公网 IP 使用安装主机的公网地址，端口使用安装时配置的网关端口；域名示例适用于已配置 HTTPS 的入口。</p>
       <h4>聊天 API · OpenAI 兼容</h4>
@@ -156,14 +172,14 @@ export function UsageGuide({ onOpenSettingsTab, initialPage }) {
       <div className="usage-guide__markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}>{hookSnippet}</ReactMarkdown></div>
       <p>模型完整成功后才用 <code>POST /v1/host/deliveries</code> 登记实际交付的 ID；失败或中断不登记。工具续轮沿用本轮上下文，不再次查找或记账；同一会话保持同一个窗口 ID，示例会读取最近五次成功交付的 ID 避免连轮重复。Hook 不会自动归档聊天原话。完整请求格式见 <a className="settings-link" href="https://github.com/Yinglianchun/Serein/blob/main/docs/hook-integration.md" target="_blank" rel="noreferrer">Hook 接入说明</a>。</p>
     </section>
-    <section className="settings-group usage-guide__page" {...page(3)}>
+    <section className="settings-group usage-guide__page" {...page(4)}>
       <div className="settings-group__heading"><h3>查找和读回原话</h3></div>
       <p>在<SettingsLink tab="features" onOpen={onOpenSettingsTab}>功能设置</SettingsLink>开启“原话查阅”，并让客户端刷新工具列表。它查找已进入当前实例原话档案的聊天记录；没有导入的记录不会出现在结果中。</p>
       <p><code>source_message_search</code> 的 query（指定文字）、date（日期）、role（角色）都可不填，多项同时填写时须全部匹配。role 可填 user、assistant 或 ai，不填查双方。date 使用 UTC+8 日期，例如 2026-09-11，范围写作 2026-09-01..2026-09-11，包含首尾两天。</p>
       <p>limit 不填最多返回 10 条，可设 1–50；条件全空时从最新原话开始。下一页保持筛选条件，将返回的 next_before_id 填入 before_id。</p>
       <p>搜索返回命中片段与原话 ID。用 <code>source_message_read</code> 的 ids 读取完整正文，一次最多 20 个 ID；neighbor_before 和 neighbor_after 各可取 0–3 条同会话前后文。没有会话标识或只有证据快照的旧原文只读正文，不拼接上下文。</p>
     </section>
-    <section className="settings-group usage-guide__page" {...page(4)}>
+    <section className="settings-group usage-guide__page" {...page(5)}>
       <div className="settings-group__heading"><h3>安装与维护</h3><p>一键脚本、管理菜单和实例路径。</p></div>
       <div className="usage-guide__markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}>{installationMarkdown(location)}</ReactMarkdown></div>
       <p>Linux 服务器安装 Python 3.9+、Docker Engine 和 Compose 插件后，解压发行目录，执行 <code>bash scripts/one_click.sh</code>。</p>
@@ -173,7 +189,7 @@ export function UsageGuide({ onOpenSettingsTab, initialPage }) {
       <p>同机客户端填写 127.0.0.1；手机连电脑填写电脑的局域网 IP，安装时选择 0.0.0.0 监听并允许网关端口通过防火墙。连接说明保存在 <code>deploy/connection-guide.txt</code>；本页“接入”也有完整地址和 Key 的填写说明。</p>
       <p>前端和聊天 API 由网关统一提供，记忆库仅供内部访问。外网访问请在网关前配置 HTTPS。模型上游在<SettingsLink tab="models" onOpen={onOpenSettingsTab}>模型页</SettingsLink>配置，任务用途到<SettingsLink tab="configuration" onOpen={onOpenSettingsTab}>配置页</SettingsLink>选择。</p>
     </section>
-    <section className="settings-group usage-guide__page" {...page(5)}>
+    <section className="settings-group usage-guide__page" {...page(6)}>
       <div className="settings-group__heading"><h3>从旧 Ombre 迁移</h3></div>
       <p>原公开版的梦境读取 <code>state/dreams/</code>，暗房读取 <code>state/darkroom/entries.jsonl</code> 及相关状态文件，按原格式迁入，不要求 <code>diary.db</code>。请使用包含 <code>state</code> 的完整旧备份；只带 <code>buckets</code> 的备份无法补齐梦境和暗房。</p>
       <p>已经迁移过的用户：升级并完成重新部署后，在 <code>se</code> 中选择<strong>菜单 10「历史数据补漏」</strong>，提供含 <code>state</code> 的完整旧库目录或 tar/tar.gz 备份，先预览数量再确认。升级本身不会自动补漏；补漏前会备份，保留暗房修订、锁定、归档／撤回状态和梦境删除记录，不调用模型、不重导 Scene、不重建向量。</p>
@@ -184,7 +200,7 @@ export function UsageGuide({ onOpenSettingsTab, initialPage }) {
       <p>重新提取的 cues 不包含你们的名字。打标、实体、cues、向量准备会调用模型；旧边由程序转换，不调用模型；旧向量只在输入和模型配置能够核对一致时复用。</p>
       <p>中断后可从同一来源继续，已完成的条目不会重复导入。备份、ID 映射和处理报告保存在 <code>deploy/runtime/migrations</code>。确认迁移结果前保留原库。</p>
     </section>
-    <section className="settings-group usage-guide__page" {...page(6)}>
+    <section className="settings-group usage-guide__page" {...page(7)}>
       <div className="settings-group__heading"><h3>Passage：找回长记忆里的具体细节</h3><p>长文分段是可选的辅助检索，当前用于 Event / Scene；独立日记和叙事卷暂不使用这条通道。</p></div>
       <p>一篇很长的 Scene 可能同时写了旅行、晚饭和一次约定。只比较整篇正文时，某个细节容易被整体主题盖住。Passage 把原文分成较短的片段，分别建立检索索引，让“那天约好在哪里见面？”更容易找到写着约定的那一段。</p>
       <p>片段帮助找回它所属的记忆，不会改写原文或把一条 Scene 变成多条记忆。命中片段后仍需经过相关性筛选和冷却，不保证每次都会带入聊天。</p>
@@ -201,7 +217,7 @@ export function UsageGuide({ onOpenSettingsTab, initialPage }) {
       <p>更换 Embedding 会使用新模型的独立索引，重新生成正文及分段向量。已保存的共享布局可以复用；历史分段尚未迁入共享布局时不保证复用。修改起切字数不改变旧布局，包括原来无需分段的空布局；重复准备也不会让这些旧短文自动重切。</p>
       <p>首次给旧记忆开启 Passage，或确认有缺失向量时，可显式准备补齐；当前后台尚不能独立捡起空队列之外的历史缺口。准备期间会暂时撤下检索就绪标记，失败需重试完成。平时检索正常，不必反复点击。</p>
     </section>
-    <section className="settings-group usage-guide__page" {...page(7)}>
+    <section className="settings-group usage-guide__page" {...page(8)}>
       <div className="settings-group__heading"><h3>自动 Event 会调用哪些模型</h3><p>开关允许后台处理后续新聊天，不等于打开时立刻调用，也不是每轮固定三次。</p></div>
       <p>聊天完整成功后，用户和助手原话先进入档案；这一步不调用整理模型。文件导入和旧库迁移的历史原话只归档，可搜索、读回和手动绑定证据，不会因打开自动摘要而批量生成 Event。</p>
       <ol>

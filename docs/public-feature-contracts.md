@@ -40,6 +40,14 @@ Scene 和日记的新建调用会独立创建内容；内部随机操作编号�
 
 已提交写入的索引同步由规范写入路径、后台 Index Worker 和维护脚本负责，不向聊天模型提供手动重试工具。
 
+## 日记与暗房
+
+日记使用独立存储和工具，不进入普通 Scene／Event 自动召回，也没有收藏状态。网页和 `read_diary` 可以按编号、日期或最近条目读取；`write_diary`、`revise_diary`、`comment_diary`、`delete_diary` 分别新建、修订、评论和软删除。修订保留作者与历史，删除不会改写既有版本。日记可作为叙事卷材料；梦境在最近 48 小时没有新 Event／Scene 时，才回退读取新日记。
+
+`write_diary` 的 `unlock_at` 填未来时间时创建暗房日记。到期前读取只返回锁定状态，不返回正文；修订、评论和删除同样被拒绝。达到解锁时间后按普通日记读取，原始作者、日期、修订与评论继续保留。锁定由 Serein 的读取与写入接口执行，不改变数据库备份本身的访问权限。
+
+新建日记同样不提供跨请求幂等键；响应丢失时先按日期或最近条目读回确认。网页填写的日期与解锁时间按实例页面约定处理；接口调用应传明确的 ISO 时间与时区。
+
 ## 聊天指令接续
 
 聊天代理提取召回查询时忽略完整的 `<worldbook>…</worldbook>` 区块，包括其中多个 `<entry>`；支持多行、多段世界书和分布在文本内容块中的标签。保留区块外的用户正文，只有世界书时不触发召回。此过滤用于查询提取，不删除发给聊天模型的世界书，也不批量改写已有存档。
@@ -62,9 +70,11 @@ Scene 和日记的新建调用会独立创建内容；内部随机操作编号�
 
 ## 开关与名字
 
-`features.memos`、`persona`、`anti_retreat`、`window_shadows`、`association`、`relations_auto_accept`、`resume`、`originals`、`narrative_tools` 默认 false，写入实例数据库。备忘的界面名称统一为“备忘”，描述为“留给未来的话”。保存后后续请求直接读取，停止注入而不清空原有记录。
+`features.current_time`、`memos`、`persona`、`anti_retreat`、`window_shadows`、`association`、`write_context`、`relations_auto_accept`、`resume`、`originals`、`favorites`、`narrative_tools`、`event_to_scene` 默认 false，写入实例数据库。备忘的界面名称统一为“备忘”，描述为“留给未来的话”。保存后后续请求直接读取，停止调用或注入而不清空原有记录。自动摘要另由 `pipeline.auto_enabled` 控制；梦境由模型选择、每日概率和 Prompt 配置控制，不属于这组布尔开关。
 
 “联想”（`features.association`）是独立开关，位于设置 → 功能；保存后下一次召回生效，无需重启或重建索引。关闭时只走直接召回，不查询关系边或返回召回关联诊断列表，保留已有关系及其管理功能。直接候选前 6 条向量结果保底，第 7–20 条须达到已保存的整篇／片段门槛（默认 0.50）、cue 语义门槛（默认 0.55）、Event 特定关键词或带回忆意图的完整实体名之一；扩展信号各最多 3 条，只取得 reranker 资格，不加分。开启联想后，从直接 Scene 候选的已确认关系中最多再补一条 Scene，共用一次 reranker，仍须达到已保存的最终门槛（默认 0.65），最多两卡，选卡后冷却且不补位。三个门槛保存后下一轮生效，无需重建向量；旧客户端只保存最终门槛时保留另外两项。联想不自动开启“关系提案自动通过”，自动通过也不自动开启联想；旧实例缺少此字段按关闭处理。
+
+“写入时找前情”（`features.write_context`）只在新 Scene 已经成功保存后运行一次辅助查找，最多返回一条可能相关的旧 Scene 和它可能所属的 Arc。结果是写入回执里的提示，不创建关系、不修改 Arc，也不影响刚刚完成的 Scene 写入；检索不可用或没有可靠线索时不返回提示。它与自动召回、联想和关系提案自动通过分别启停。
 
 备忘开启时注册 `memo_create`、`memo_list`、`memo_update`；窗影开启时只注册 `window_shadow_write`；开窗续接使用 `/resume` 指令；原话查阅开启时注册 `source_message_search`、`source_message_read`。MCP 的 tools/list 和 tools/call 都重新核对开关，HTTP 同样处理关闭状态。客户端应刷新工具列表；即使缓存着旧列表，关闭的工具也不能调用。白名单继续限制可以出现的工具。
 
