@@ -12,7 +12,7 @@ from typing import Any
 from typing import Iterable
 from ..identity import identity_names
 from ..query_terms import GENERIC_LEXICAL_STOPWORDS
-_INTENT_PATTERNS = (('exact_evidence', 'exact_evidence', re.compile('原话|逐字|哪天|哪一[天次]|什么时候|具体日期|怎么说的')), ('arc_narrative', 'narrative_read', re.compile('整体|完整(?:剧情|故事|经过)|从头|整条线|讲讲(?:剧情|故事)')), ('entity_detail', 'none', re.compile('是谁|是什么人|什么来头|指的是谁|是哪位|怎么评价|如何评价|怎么看待|说过什么|说了什么|提到过什么|聊过什么|指什么|是什么意思')), ('progress', 'latest_relevant_member', re.compile('看到哪|读到哪|做到哪|进行到哪|进展(?:到哪|如何|怎么样)|追到哪')), ('timeline', 'timeline', re.compile('后来|后续|之后|怎么发展|如何发展|发展成|演变|时间线')), ('recent', 'latest_relevant_member', re.compile('最近(?:怎么样|如何|发生了什么|有什么)')), ('member_search', 'member_search', re.compile('第(?:一|1)次|初次|最初|刚开始')), ('member_search', 'member_search', re.compile('哪一段|那一段|这段|其中一段|某一段|提到.+(?:那段|一段)')), ('recall_reference', 'arc_index', re.compile('还记得|记得|想起|回忆|上次(?:聊|说|看|读|做)')))
+_INTENT_PATTERNS = (('entity_detail', 'none', re.compile('是谁|是什么人|什么来头|指的是谁|是哪位|怎么评价|如何评价|怎么看待|说过什么|说了什么|提到过什么|聊过什么|指什么|是什么意思')), ('progress', 'latest_relevant_member', re.compile('看到哪|读到哪|做到哪|进行到哪|进展(?:到哪|如何|怎么样)|追到哪')), ('timeline', 'timeline', re.compile('后来|后续|之后|怎么发展|如何发展|发展成|演变|时间线')), ('recent', 'latest_relevant_member', re.compile('最近(?:怎么样|如何|发生了什么|有什么)')), ('member_search', 'member_search', re.compile('第(?:一|1)次|初次|最初|刚开始')), ('member_search', 'member_search', re.compile('哪一段|那一段|这段|其中一段|某一段|提到.+(?:那段|一段)')), ('recall_reference', 'arc_index', re.compile('还记得|记得|想起|回忆|上次(?:聊|说|看|读|做)')))
 
 def _key(value: Any) -> str:
     normalized = unicodedata.normalize('NFKC', str(value or '')).casefold()
@@ -130,7 +130,7 @@ class ObservedEntityShadowIndex:
         if len(trusted_arc_keys) == 1:
             chosen = next((row for row in matches if row['trusted'] and row['arc_key'] == trusted_arc_keys[0]))
             scope_anchor = {'entity': chosen['entity'], 'arc_key': chosen['arc_key'], 'source_kind': chosen['source_kind']}
-            return {'status': 'scoped_recall' if intent != 'none' else 'scope_only', 'intent': intent, 'operator': operator, 'intent_view': residue, 'scope_anchor': scope_anchor, 'matches': matches, 'retrieval_allowed': intent != 'none', 'decision_applied': False}
+            return {'status': 'scoped_recall' if intent != 'none' else 'scope_only', 'intent': intent, 'operator': operator, 'intent_view': residue, 'scope_anchor': scope_anchor, 'matches': matches, 'retrieval_allowed': True, 'decision_applied': False}
         if matches:
-            return {'status': 'ambiguous_scope', 'intent': intent, 'operator': operator, 'intent_view': residue, 'scope_anchor': None, 'candidate_arc_keys': sorted({row['arc_key'] for row in matches}), 'matches': matches, 'retrieval_allowed': False, 'decision_applied': False}
+            return {'status': 'ambiguous_scope', 'intent': intent, 'operator': operator, 'intent_view': residue, 'scope_anchor': None, 'candidate_arc_keys': sorted({row['arc_key'] for row in matches}), 'matches': matches, 'retrieval_allowed': True, 'decision_applied': False}
         return {'status': 'insufficient_scope' if intent != 'none' else 'no_scope', 'intent': intent, 'operator': operator, 'intent_view': text, 'scope_anchor': None, 'matches': [], 'retrieval_allowed': False, 'decision_applied': False}

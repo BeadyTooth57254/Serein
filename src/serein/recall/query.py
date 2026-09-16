@@ -17,6 +17,7 @@ class Query:
     mode: str = "surface"
     exclude_ids: tuple[str, ...] = ()
     delivered_ids: tuple[str, ...] = ()
+    user_utterance: bool = False
 
     def __post_init__(self):
         if self.mode not in {"surface", "lookup"} or self.intent not in {"direct", "latest", "progress", "timeline", "narrative", "exact"}:

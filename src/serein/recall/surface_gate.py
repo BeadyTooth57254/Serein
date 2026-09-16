@@ -1,4 +1,4 @@
-"""Germany's two-stage surface decision, with explicit read-only scope data."""
+"""Apply the router's final action, with explicit read-only scope data."""
 
 import json
 from functools import cache
@@ -46,28 +46,19 @@ class SurfaceGate:
             self.engine.observed_entity_shadow_index = index
 
     @staticmethod
-    def debug(decision):
+    def debug(decision, *, user_utterance=False):
         winner = next((row for row in decision.get('scores', [])
                        if row['name'] == decision.get('route')), None)
-        return {**decision, 'route_action': winner['action'] if winner else decision['action'],
-                'applied_action': decision['action']}
+        return {**decision, 'route_action': decision['action'],
+                'template_action': winner['action'] if winner else None,
+                'applied_action': decision['action'], 'user_utterance': user_utterance}
 
-    def before_candidates(self, text, decision):
-        return self.engine._typed_pre_candidate_surface_gate(text, self.debug(decision))
+    def before_candidates(self, text, decision, *, user_utterance=False):
+        return self.engine._typed_pre_candidate_surface_gate(text, self.debug(decision, user_utterance=user_utterance))
 
-    def after_candidates(self, text, decision, candidates):
+    def after_candidates(self, text, decision, candidates, *, user_utterance=False):
         index = self.engine.observed_entity_shadow_index
         scope = index.resolve_query(text) if index else {}
-        owners = [(hit['kind'], hit['id']) for hit in candidates]
-        matches = index.owner_query_matches(text, owner_keys=owners) if index else []
-        rows = []
-        for hit in candidates:
-            sources = []
-            if hit['method'] == 'cue':
-                sources.append('scene_cue_candidate')
-            elif hit['kind'] == 'event' and hit['method'] == 'lexical':
-                sources.append('event_lexical_candidate')
-            rows.append({'candidate_sources': sources})
         result = self.engine._typed_surface_reranker_gate(
-            text, scope, self.debug(decision), candidates=rows, owner_entity_matches=matches)
+            text, scope, self.debug(decision, user_utterance=user_utterance))
         return {**result, 'entity_scope': scope}

@@ -28,12 +28,13 @@ class Recall:
 
     def run(self, text, *, mode="surface", limit=5, with_evidence=False, method="lexical", min_cosine=None,
             topic=None, intent="direct", exclude_ids=(), delivered_ids=(), use_passages=None,
-            body_char_limit=1200, delivered_menu_keys=(), recall_ablation='normal', deadline_at=None):
+            body_char_limit=1200, delivered_menu_keys=(), recall_ablation='normal', deadline_at=None,
+            user_utterance=False):
         if recall_ablation not in ('normal','without_cues','without_embedding'):
             raise ValueError('Unsupported recall ablation')
         if method not in {"lexical", "semantic"} or not 1 <= limit <= 100:
             raise ValueError("Invalid recall method or limit")
-        query = Query(text, topic, intent, mode, tuple(exclude_ids), tuple(delivered_ids))
+        query = Query(text, topic, intent, mode, tuple(exclude_ids), tuple(delivered_ids), user_utterance)
         result = {"query": text, "topic": query.search_text, "intent": intent, "method": method,
                   "status": "no_match", "pools": {}, "selected_refs": [], "candidates": [],
                   "injected": False, "suppressed": {}, "selection_scope": "retrieved_candidates"}
@@ -73,12 +74,12 @@ class Recall:
             names = identity(self.settings.database)
             gate = load_gate(self.policy.germany_policy_file, names['user_name'], names['ai_name'])
             result["routing"] = decision
-            result["pre_candidate_gate"] = gate.before_candidates(text, decision)
+            result["pre_candidate_gate"] = gate.before_candidates(text, decision, user_utterance=user_utterance)
             if result["pre_candidate_gate"]["applied"]:
                 return {**result, "status": "skipped", "reason": result["pre_candidate_gate"]["reason"]}
             from .typed_surface import run
             # Automatic surface recall ranks valid vectors without a hard floor;
-            # the route gates and body reranker decide whether to surface them.
+            # the final route action controls search, and body reranking admits cards.
             # Explicit lookup keeps the caller's min_cosine above.
             return run(self, query, result, gate, decision, options['query_embedding'],
                        cutoff=-1.0, limit=limit,
@@ -113,7 +114,7 @@ class Recall:
                     known[hit['id']]['entity_handles']=hit['entity_handles']
                 else: candidates.append(hit)
         if gate:
-            result["surface_reranker_gate"] = gate.after_candidates(text, decision, candidates)
+            result["surface_reranker_gate"] = gate.after_candidates(text, decision, candidates, user_utterance=user_utterance)
             if result["surface_reranker_gate"]["applied"]:
                 return {**result, "status": "skipped", "suppressed": {"query_does_not_need_memory": len(candidates)}}
         rejected, admitted = Counter(), {"event": [], "scene": []}

@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import re
-import unicodedata
 from datetime import datetime
 from typing import Any
 from .query_understanding import query_intent_rules
@@ -11,7 +10,6 @@ from .query_terms import DEFAULT_AI_ADDRESS_TERMS
 from .query_terms import GENERIC_LEXICAL_STOPWORDS
 from .query_terms import QUERY_PLANNER_GENERIC_TERMS
 from .query_terms import identity_address_terms
-from .memory_recall.retrieval_budget import build_retrieval_budget
 from .utils import parse_human_date_reference
 from .utils import strip_wikilinks
 GENERIC_KEYWORD_MATCH_TERMS = frozenset({'game', 'games', '玩法', '游戏', '今天', '以前', '之前', '刚刚', '刚才', '当前', '最近', '现在', '玩', '玩过', '看到', '看到哪', '读到', '读到哪', '做到', '做到哪', '进行', '进行到哪', '进展', '追到', '追到哪', '哪', '后来', '后续', '之后', '发展', '演变', '时间线', '怎么样', '如何', '发生了什么', '有什么'})
@@ -142,56 +140,18 @@ class GatewayService:
     def _typed_surface_reranker_gate(self, query: str, scope: dict[str, Any], semantic_recall_debug: dict[str, Any] | None, *, candidates: list[dict[str, Any]] | None=None, owner_entity_matches: list[dict[str, Any]] | None=None) -> dict[str, Any]:
         semantic_debug = semantic_recall_debug if isinstance(semantic_recall_debug, dict) else {}
         route = str(semantic_debug.get('route') or '').strip()
-        route_action = str(semantic_debug.get('route_action') or 'recall').strip().lower()
-        scope_anchor = scope.get('scope_anchor') if isinstance(scope.get('scope_anchor'), dict) else {}
-        has_arc_scope = bool(str(scope_anchor.get('arc_key') or '').strip() or str(scope.get('status') or '') == 'scoped_recall')
-        retrieval_budget = semantic_debug.get('retrieval_budget')
-        if not isinstance(retrieval_budget, dict):
-            retrieval_budget = build_retrieval_budget(query, route=route, route_action=route_action, semantic_debug=semantic_debug)
-        query_facets = [facet for facet in retrieval_budget.get('query_facets') or [] if isinstance(facet, dict)]
-        has_anchor = bool(any((str(facet.get('kind') or '') in {'protected_phrase', 'exact_anchor', 'reference_entity'} for facet in query_facets)))
-        has_explicit_recall = bool(self._query_has_explicit_recall_structure(query) or retrieval_budget.get('recall_markers') or retrieval_budget.get('deep_recall_markers') or retrieval_budget.get('explicit_deep_reasons'))
-        detail_markers = query_intent_terms('typed_recall.detail_question_markers')
-        normalized_query = unicodedata.normalize('NFKC', str(query or '')).casefold()
-        matched_detail_markers = [marker for marker in detail_markers if str(marker or '').casefold() in normalized_query]
-        memory_candidate_sources = {'scene_cue_candidate', 'event_lexical_candidate'}
-        matched_candidate_sources = sorted({str(source) for row in candidates or [] if isinstance(row, dict) for source in row.get('candidate_sources') or [] if str(source) in memory_candidate_sources})
-        observed_matches = [dict(row) for row in owner_entity_matches or [] if isinstance(row, dict)]
-        has_memory_side_handle = bool(observed_matches or matched_candidate_sources)
-        has_memory_backed_detail = bool(matched_detail_markers and has_memory_side_handle)
-        has_identity_name_intent = bool(getattr(self, 'identity', None) and self._identity_name_search_terms(query))
-        name_origin_terms = self._name_origin_search_terms(query)
-        has_name_origin_intent = bool(name_origin_terms)
-        applied = bool(route in {'present_chitchat', 'present_reality'} and route_action == 'skip' and (not has_arc_scope) and (not has_anchor) and (not has_explicit_recall) and (not has_memory_backed_detail) and (not has_identity_name_intent) and (not has_name_origin_intent))
-        return {'applied': applied, 'route': route, 'route_action': route_action, 'has_arc_scope': has_arc_scope, 'has_anchor': has_anchor, 'has_explicit_recall': has_explicit_recall, 'has_memory_backed_detail': has_memory_backed_detail, 'has_identity_name_intent': has_identity_name_intent, 'has_name_origin_intent': has_name_origin_intent, 'name_origin_terms': name_origin_terms, 'matched_detail_markers': matched_detail_markers, 'matched_candidate_sources': matched_candidate_sources, 'owner_entity_matches': observed_matches, 'reason': 'daily_surface_without_memory_intent' if applied else 'typed_retrieval_allowed'}
+        # Threshold, margin and boundary checks have already resolved the action.
+        # Neither a template default nor query wording can override it here.
+        route_action = str(semantic_debug.get('action') or semantic_debug.get('applied_action')
+                           or semantic_debug.get('route_action') or 'recall').strip().lower()
+        applied = route_action == 'skip'
+        reason = (semantic_debug.get('reason') or 'matched_skip_route') if applied else 'typed_retrieval_allowed'
+        return {'applied': applied, 'route': route, 'route_action': route_action,
+                'template_action': semantic_debug.get('template_action'), 'reason': reason}
 
     def _typed_pre_candidate_surface_gate(self, query: str, semantic_recall_debug: dict[str, Any] | None) -> dict[str, Any]:
-        semantic_debug = semantic_recall_debug if isinstance(semantic_recall_debug, dict) else {}
-        route = str(semantic_debug.get('route') or '').strip()
-        route_action = str(semantic_debug.get('route_action') or 'recall').strip().lower()
-        if route not in {'present_chitchat', 'present_reality'} or route_action != 'skip':
-            return {'applied': False, 'stage': 'pre_candidate', 'route': route, 'route_action': route_action, 'reason': 'semantic_route_requires_candidate_search'}
-        scope = {'status': 'unavailable', 'intent': 'none', 'operator': 'none', 'scope_anchor': None}
-        scope_resolver = getattr(getattr(self, 'observed_entity_shadow_index', None), 'resolve_query', None)
-        if callable(scope_resolver):
-            resolved = scope_resolver(query)
-            if isinstance(resolved, dict):
-                scope = resolved
-        detail_markers = query_intent_terms('typed_recall.detail_question_markers')
-        normalized_query = unicodedata.normalize('NFKC', str(query or '')).casefold()
-        has_detail_question = any((str(marker or '').casefold() in normalized_query for marker in detail_markers))
-        owner_entity_matches: list[dict[str, Any]] = []
-        owner_query_matcher = getattr(getattr(self, 'observed_entity_shadow_index', None), 'owner_query_matches', None)
-        if has_detail_question and callable(owner_query_matcher):
-            owner_entity_matches = [dict(row) for row in owner_query_matcher(query, limit=8) if isinstance(row, dict)]
-        surface_scope = scope if str(scope.get('status') or '') == 'scoped_recall' else {**scope, 'scope_anchor': None}
-        surface_gate = self._typed_surface_reranker_gate(query, surface_scope, semantic_debug, candidates=[], owner_entity_matches=owner_entity_matches)
-        reader = getattr(getattr(self, 'recall_policy', None), 'specific_query_terms', None)
-        raw_terms = list(reader(query)) if callable(reader) else []
-        specific_terms = [str(term) for term in raw_terms if self._matched_query_term_is_specific(term)]
-        has_named_memory_intent = bool(str(scope.get('intent') or 'none') != 'none' and specific_terms)
-        applied = bool(surface_gate.get('applied') and (not has_named_memory_intent))
-        return {**surface_gate, 'stage': 'pre_candidate', 'applied': applied, 'scope_status': str(scope.get('status') or ''), 'scope_intent': str(scope.get('intent') or 'none'), 'has_named_memory_intent': has_named_memory_intent, 'specific_terms': specific_terms[:8], 'reason': 'daily_surface_without_memory_intent' if applied else 'typed_retrieval_warrant_present'}
+        decision = self._typed_surface_reranker_gate(query, {}, semantic_recall_debug)
+        return {**decision, 'stage': 'pre_candidate'}
 
     @staticmethod
     def _query_has_explicit_recall_structure(query: str) -> bool:

@@ -22,6 +22,7 @@ from .germany.memory_recall.typed_admission_shadow import evaluate_typed_admissi
 from .germany.memory_recall.typed_candidate_shadow import rerank_lane_with_freshness
 from .index import Search, content_stamp, unit_vector
 from .rendering import render
+from .person_references import resolve_person_references
 from .legacy_indexes import lexical_index, cue_index
 from .germany.memory_recall.fact_event_lexical_shadow import _source_hash as lexical_hash
 from ..deployment import read_from_store
@@ -486,11 +487,11 @@ def run(engine, query, result, gate, decision, embedding, *, cutoff, limit, use_
         row_keys={(r['owner_kind'],r['owner_id']) for r in rows}
         owner_matches=[match for match in all_entity_matches
                        if (str(match.get('owner_kind') or ''),str(match.get('owner_id') or '')) in row_keys]
-        surface=upstream._typed_surface_reranker_gate(query.text,scope,gate.debug(decision),
+        surface=upstream._typed_surface_reranker_gate(query.text,scope,gate.debug(decision,user_utterance=query.user_utterance),
                     candidates=rows,owner_entity_matches=owner_matches)
         result['surface_reranker_gate']={**surface,'entity_scope':scope}
         if surface.get('applied') or found.get('status')=='not_retrieved':
-            return {**result,'status':'skipped','reason':found.get('reason') or 'daily_surface_without_memory_intent'}
+            return {**result,'status':'skipped','reason':found.get('reason') or surface['reason']}
         if strategy=='mixed' and association_enabled:
             rows=add_related_candidate(snapshot,ranked,rows,query,engine.policy)
             if len(rows)>result['candidate_retrieval']['actual_candidate_count']:
@@ -501,8 +502,9 @@ def run(engine, query, result, gate, decision, embedding, *, cutoff, limit, use_
             result['candidate_retrieval']['actual_candidate_count']=len(rows)
         rows=[row for row in rows if row['owner_kind']!='event' or snapshot.catalog[row['owner_id']]['recallable']]
         admission_scope=scope
-        if strategy=='mixed' and scope.get('operator') not in ('narrative_read','exact_evidence'):
+        if strategy=='mixed':
             admission_scope={**scope,'operator':'none'}
+        rerank_query=resolve_person_references(query.text,upstream.identity) if query.user_utterance else query.text
         admission=evaluate_typed_admission_shadow(query.text,admission_scope,rows,direct_threshold=engine.policy.direct_threshold)
         scores={}
         if admission['mode']=='direct_evidence_rerank' and rows and engine.reranker:
@@ -516,16 +518,16 @@ def run(engine, query, result, gate, decision, embedding, *, cutoff, limit, use_
                 if remaining is not None and isinstance(engine.reranker,RerankerClient):
                     import httpx
                     with httpx.Client(timeout=max(.05,remaining)) as transport:
-                        scores=engine.reranker(query.text,documents,client=transport)
+                        scores=engine.reranker(rerank_query,documents,client=transport)
                 else:
-                    scores=engine.reranker(query.text,documents)
+                    scores=engine.reranker(rerank_query,documents)
             except RerankerProviderError as exc:
                 result['reranker_error']=exc.code
             except ValueError:
                 result['reranker_error']='provider_score_unavailable'
             admission=evaluate_typed_admission_shadow(query.text,admission_scope,rows,rerank_scores=scores,
                                                        direct_threshold=engine.policy.direct_threshold)
-        result['admission']=admission
+        result['admission']={**admission,'rerank_query':rerank_query}
         result['candidates']=admission['candidates']
         result['candidate_scores']=[{'ref':upstream._typed_owner_ref(row),'title':row['title'],
             'vector_score':row['score'],'score_channels':row.get('score_components',{}),

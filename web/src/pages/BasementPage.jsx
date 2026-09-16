@@ -35,6 +35,7 @@ import {
   saveSemanticRouteDraft,
 } from "../storage/basementStore.js";
 import { upsertRecallSimulationTrainingLabel } from "../storage/recallSimulationTraining.js";
+import { recallScore, recallSimulationDiagnostics } from "../utils/recallSimulationDiagnostics.js";
 
 const routeLabels = {
   simple_contact: "陪伴与贴近",
@@ -68,10 +69,12 @@ const reasonLabels = {
   below_threshold: "最高分未过阈值，继续召回",
   insufficient_margin: "路线差距不足，继续召回",
   route_index_stale: "例句已变化，向量需要重建",
+  uncertain_route: "路线未达到明确判断条件，继续召回",
+  daily_surface_without_memory_intent: "当前话语未触发记忆需求",
 };
 
-const actionLabel = (action) => (action === "skip" ? "no-recall" : "recall");
-const percent = (value) => `${(Number(value || 0) * 100).toFixed(1)}%`;
+const actionLabel = (action) => ({skip: "no-recall", recall: "recall"}[action] || "未返回");
+const percent = (value) => value == null || value === "" ? "—" : `${(Number(value) * 100).toFixed(1)}%`;
 const clone = (value) => JSON.parse(JSON.stringify(value));
 const defaultRouteThreshold = 0.72;
 
@@ -137,7 +140,8 @@ async function readRouteApiResponse(response) {
 }
 
 function openSceneInMemory(item) {
-  const sceneId = item.bucket_id || item.moment_id || String(item.id || "").split("#").pop();
+  if (item.source_kind === "event" || String(item.id || "").startsWith("event:")) return;
+  const sceneId = item.bucket_id || item.moment_id || String(item.id || "").replace(/^scene:/, "").split("#").pop();
   if (!sceneId) return;
   window.localStorage.setItem("serein.memory.open-source-id", sceneId);
   window.location.hash = "#memory";
@@ -254,6 +258,7 @@ const typedAdmissionReasonLabels = {
 
 function RecallSimulator({thresholdTrial,onClearThresholdTrial}) {
   const [query, setQuery] = useState("");
+  const [resultScope, setResultScope] = useState(null);
   const [status, setStatus] = useState("idle");
   const [result, setResult] = useState(null);
   const [error, setError] = useState("");
@@ -317,6 +322,7 @@ function RecallSimulator({thresholdTrial,onClearThresholdTrial}) {
         trial:{threshold:trialValue,label:trialThreshold===null?'默认':'试调',result:trialRun.status==='fulfilled'?trialRun.value:null,error:trialRun.status==='rejected'?trialRun.reason?.message:''}});
       if(trialRun.status==='rejected'&&savedRun.status==='rejected')throw new Error('两档模拟都没有完成，请稍后重试。');
       setResult(trialRun.status==='fulfilled'?trialRun.value:savedRun.value);
+      setResultScope(simulationScope);
       setTrainingForm({ expectedAction: "", expectedRoute: "", memoryIds: "" });
       setCandidateJudgments({});
       setTrainingNotice("");
@@ -331,7 +337,8 @@ function RecallSimulator({thresholdTrial,onClearThresholdTrial}) {
 
   const debug = result?.debug ?? {};
   const semantic = debug.semantic_recall_debug ?? {};
-  const routeScores = semantic.scores ?? [];
+  const diagnostics = recallSimulationDiagnostics(result);
+  const routeScores = diagnostics.routeScores;
   const boundaryVeto = semantic.boundary_veto ?? {};
   const boundaryCandidate = boundaryVeto.candidate ?? null;
   const injected = debug.recall_why_summary?.injected ?? [];
@@ -371,7 +378,7 @@ function RecallSimulator({thresholdTrial,onClearThresholdTrial}) {
   const ablationDebug = retrievalBudget.recall_ablation ?? semantic.recall_ablation ?? {
     mode: recallAblation,
   };
-  const resultSimulationScope = semantic.simulation_scope || simulationScope;
+  const resultSimulationScope = semantic.simulation_scope || resultScope || "live_mirror";
   const candidateEvidence = Array.isArray(cheapRetrieval.candidates)
     ? cheapRetrieval.candidates
     : [];
@@ -388,7 +395,7 @@ function RecallSimulator({thresholdTrial,onClearThresholdTrial}) {
       ...current,
       expectedAction,
       expectedRoute: current.expectedRoute
-        || (expectedAction === "recall" ? "recall_needed" : semantic.route || "present_chitchat"),
+        || (expectedAction === "recall" ? "recall_needed" : diagnostics.route || "present_chitchat"),
     }));
     setTrainingNotice("");
   };
@@ -400,8 +407,8 @@ function RecallSimulator({thresholdTrial,onClearThresholdTrial}) {
       expectedAction: trainingForm.expectedAction,
       expectedRoute: trainingForm.expectedRoute,
       expectedMemoryIds: trainingForm.memoryIds.split(/[\s,，]+/),
-      observedAction: semantic.applied_action,
-      observedRoute: semantic.route,
+      observedAction: diagnostics.appliedAction,
+      observedRoute: diagnostics.route,
       ablationMode: ablationDebug.mode || recallAblation,
       candidateTelemetry: candidateEvidence,
       candidateJudgments: candidateEvidence.flatMap((candidate, index) => {
@@ -409,7 +416,7 @@ function RecallSimulator({thresholdTrial,onClearThresholdTrial}) {
         return relevance ? [{ memoryId: candidate.bucket_id, rank: index + 1, relevance }] : [];
       }),
       simulationTelemetry: {
-        semantic,
+        semantic: {...semantic, applied_action: diagnostics.appliedAction},
         retrievalBudget,
         sentinel,
         ablation: ablationDebug,
@@ -429,7 +436,7 @@ function RecallSimulator({thresholdTrial,onClearThresholdTrial}) {
         <div>
           <span className="basement-kicker">真实 Gateway 路径</span>
           <h2 id="recall-simulator-title">召回模拟</h2>
-          <p>输入原句，对照当前 live 注入与 typed Event / Scene 的预计注入。测试不会留下正式注入记录。</p>
+          <p>输入原句，查看当前召回流程在两档阈值下返回的卡片、候选和筛选原因。测试不会留下正式注入记录。</p>
         </div>
         <div className="basement-live-note">
           <i aria-hidden="true" />
@@ -549,21 +556,53 @@ function RecallSimulator({thresholdTrial,onClearThresholdTrial}) {
           <section className="recall-decision">
             <div className="recall-decision__route">
               <span>ROUTE</span>
-              <strong>{routeLabels[semantic.route] || semantic.route || "未匹配"}</strong>
-              <em className={`route-action route-action--${semantic.applied_action || "recall"}`}>
-                {actionLabel(semantic.applied_action)}
+              <strong>{routeLabels[diagnostics.route] || diagnostics.route || "未返回"}</strong>
+              <em className={`route-action route-action--${diagnostics.routeAction || "unknown"}`}>
+                {actionLabel(diagnostics.routeAction)}
               </em>
             </div>
             <dl className="recall-decision__facts">
-              <div><dt>置信度</dt><dd>{percent(semantic.confidence)}</dd></div>
-              <div><dt>候选记忆</dt><dd>{debug.candidate_count ?? 0}</dd></div>
-              <div><dt>本档预计注入</dt><dd>{debug.injected_bucket_ids?.length ?? result.recalled_ids?.length ?? 0}</dd></div>
-              <div><dt>原因</dt><dd>{reasonLabels[semantic.reason] || semantic.reason || "继续按证据判断"}</dd></div>
-              <div><dt>模拟范围</dt><dd>{resultSimulationScope === "full_shadow" ? "完整 shadow 诊断" : "live mirror"}</dd></div>
+              <div><dt>路由分数</dt><dd>{recallScore(diagnostics.routeScore)}</dd></div>
+              <div><dt>候选记忆</dt><dd>{diagnostics.candidateCountLabel}</dd></div>
+              <div><dt>本档模拟卡片</dt><dd>{diagnostics.cardCount ?? "未返回"}</dd></div>
+              <div><dt>路由原因</dt><dd>{reasonLabels[diagnostics.routeReason] || diagnostics.routeReason || "未返回"}</dd></div>
+              <div><dt>处理阶段</dt><dd>{diagnostics.stage}</dd></div>
+              {diagnostics.reason && <div><dt>处理原因</dt><dd>{reasonLabels[diagnostics.reason] || diagnostics.reason}</dd></div>}
+              <div><dt>模拟范围</dt><dd>{resultSimulationScope === "full_shadow"
+                ? Object.keys(retrievalBudget).length ? "完整 shadow 诊断" : "当前流程（未返回额外 shadow）"
+                : "live mirror"}</dd></div>
             </dl>
           </section>
 
-          {resultSimulationScope === "full_shadow" && (
+          {diagnostics.hasLive && (
+          <section className="recall-result-section recall-evidence-decomposition recall-typed-diagnostics" aria-label="本档候选与筛选">
+            <div className="recall-result-section__heading">
+              <h3>本档候选与筛选</h3><span>{diagnostics.stage}</span>
+            </div>
+            <dl className="recall-decision__facts">
+              <div><dt>筛选方式</dt><dd>{typedAdmissionModeLabels[diagnostics.admission.mode] || diagnostics.admission.mode || "未进入"}</dd></div>
+              <div><dt>最终筛选阈值</dt><dd>{recallScore(diagnostics.admission.direct_threshold)}</dd></div>
+              <div><dt>重排实际用句</dt><dd>{diagnostics.rerankQuery ?? "未返回"}</dd></div>
+            </dl>
+            {diagnostics.candidates.length ? <div className="recall-evidence-list">
+              {diagnostics.candidates.map((candidate) => <article
+                className={`recall-evidence-row ${candidate.selected ? "is-qualified" : "is-suppressed"}`} key={candidate.ref}>
+                <header><strong>{candidate.title || candidate.ref}</strong>
+                  <span>{candidate.ref.split(":")[0]} · {candidate.selected ? "已生成卡片" : candidate.disposition || "未返回筛选结果"}</span></header>
+                <dl>
+                  <div><dt>候选分数</dt><dd>{recallScore(candidate.candidate_score)}</dd></div>
+                  <div><dt>重排分数</dt><dd>{recallScore(candidate.rerank_score)}</dd></div>
+                  <div><dt>筛选原因</dt><dd>{typedAdmissionReasonLabels[candidate.reason] || candidate.reason || "未返回"}</dd></div>
+                  <div><dt>候选来源</dt><dd>{(candidate.candidate_sources || []).map((source) => recallCandidateSourceLabels[source] || source).join(" · ") || "未返回"}</dd></div>
+                </dl>
+                <small>{candidate.ref}</small>
+              </article>)}
+            </div> : <p className="recall-none">{diagnostics.candidateCountLabel === "未运行"
+              ? "候选检索未运行。" : diagnostics.candidateCount === 0 ? "本轮候选数为 0。" : "接口未返回候选明细。"}</p>}
+          </section>
+          )}
+
+          {resultSimulationScope === "full_shadow" && Object.keys(retrievalBudget).length > 0 && (
           <section className="recall-result-section">
             <div className="recall-result-section__heading">
               <h3>预算 Router（simulation shadow）</h3>
@@ -599,7 +638,7 @@ function RecallSimulator({thresholdTrial,onClearThresholdTrial}) {
           </section>
           )}
 
-          {resultSimulationScope === "full_shadow" && (
+          {resultSimulationScope === "full_shadow" && Object.keys(passageCandidateShadow).length > 0 && (
           <section className="recall-result-section recall-evidence-decomposition">
             <div className="recall-result-section__heading">
               <h3>局部证据候选（simulation shadow）</h3>
@@ -664,7 +703,7 @@ function RecallSimulator({thresholdTrial,onClearThresholdTrial}) {
           </section>
           )}
 
-          {resultSimulationScope === "full_shadow" && (
+          {resultSimulationScope === "full_shadow" && Object.keys(typedPreview).length > 0 && (
           <section className="recall-result-section recall-evidence-decomposition typed-recall-preview">
             <div className="recall-result-section__heading">
               <h3>Event / Scene 预计注入</h3>
@@ -710,7 +749,7 @@ function RecallSimulator({thresholdTrial,onClearThresholdTrial}) {
               </div>
             ) : <p className="recall-none">{typedPreview.reason || "没有 Event / Scene 进入 admission。"}</p>}
             <div className="recall-result-section__heading typed-recall-preview__cards-heading">
-              <h3>如果开启 live，将交给 {identityName("assistant")}</h3>
+              <h3>这次模拟返回的卡片</h3>
               <span>{typedPreviewCards.length} 张记忆卡{typedPreview.menus_included?.length ? ` · ${typedPreview.menus_included.length} 个 Arc 菜单` : ""}</span>
             </div>
             {typedPreviewCards.length ? (
@@ -723,7 +762,7 @@ function RecallSimulator({thresholdTrial,onClearThresholdTrial}) {
                   </article>
                 ))}
               </div>
-            ) : <p className="recall-none">本轮不会自动注入 Event / Scene 卡；叙事卷或精确证据请求可能只返回按需读取入口。</p>}
+            ) : <p className="recall-none">这次额外模拟没有返回 Event / Scene 卡片。</p>}
           </section>
           )}
 
@@ -733,14 +772,16 @@ function RecallSimulator({thresholdTrial,onClearThresholdTrial}) {
               {routeScores.map((score) => (
                 <div className="route-score" key={score.route}>
                   <div><strong>{routeLabels[score.route] || score.route}</strong><span>{actionLabel(score.action)}</span></div>
-                  <output>{percent(score.score)}</output>
-                  <small>最近例句：{score.top_examples?.[0]?.text || "无"}</small>
+                  <output>{recallScore(score.score)}</output>
+                  {score.threshold != null && <small>路由阈值：{recallScore(score.threshold)}</small>}
+                  {score.top_examples?.[0]?.text && <small>最近例句：{score.top_examples[0].text}</small>}
                 </div>
               ))}
             </div>
+            {!routeScores.length && <p className="recall-none">接口未返回路线对照分数。</p>}
           </section>
 
-          {resultSimulationScope === "full_shadow" && (
+          {resultSimulationScope === "full_shadow" && Object.keys(cheapRetrieval).length > 0 && (
           <section className="recall-result-section recall-evidence-decomposition">
             <div className="recall-result-section__heading">
               <h3>候选证据拆解</h3>
@@ -831,7 +872,7 @@ function RecallSimulator({thresholdTrial,onClearThresholdTrial}) {
           )}
 
           <section className="recall-result-section">
-            <div className="recall-result-section__heading"><h3>当前 live 注入</h3><span>{cards.length || injected.length} 条</span></div>
+            <div className="recall-result-section__heading"><h3>本档模拟卡片</h3><span>{diagnostics.cardCount ?? "未返回"} 条 · 仅模拟</span></div>
             {(cards.length || injected.length) ? (
               <div className="recall-card-list">
                 {(cards.length ? cards : injected).map((item, index) => (
@@ -844,13 +885,13 @@ function RecallSimulator({thresholdTrial,onClearThresholdTrial}) {
                         cue 命中（正文不导出）
                       </small>
                     ) : null}
-                    <button type="button" className="recall-card__memory-link" onClick={() => openSceneInMemory(item)}>
+                    {item.source_kind !== "event" && !String(item.id || "").startsWith("event:") && <button type="button" className="recall-card__memory-link" onClick={() => openSceneInMemory(item)}>
                       在记忆卡里查看召回入口
-                    </button>
+                    </button>}
                   </article>
                 ))}
               </div>
-            ) : <p className="recall-none">Router 允许继续寻找，但这一句没有记忆通过证据门。</p>}
+            ) : <p className="recall-none">{diagnostics.stage}。{diagnostics.reason ? `原因：${reasonLabels[diagnostics.reason] || diagnostics.reason}` : "本档没有返回记忆卡片。"}</p>}
           </section>
 
           <section className="recall-training-label">
@@ -893,7 +934,7 @@ function RecallSimulator({thresholdTrial,onClearThresholdTrial}) {
               <button
                 className="basement-primary-action"
                 type="button"
-                disabled={!trainingForm.expectedAction}
+                disabled={!trainingForm.expectedAction || !diagnostics.appliedAction}
                 onClick={saveTrainingLabel}
               ><Check size={16} aria-hidden="true" />保存标注</button>
             </div>

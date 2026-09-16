@@ -90,15 +90,7 @@ def evaluate_typed_admission_shadow(
             }
         )
 
-    if operator == "narrative_read":
-        mode = "defer_to_narrative"
-        for row in rows:
-            row.update(disposition="defer", reason=mode)
-    elif operator == "exact_evidence":
-        mode = "defer_to_exact_evidence"
-        for row in rows:
-            row.update(disposition="defer", reason=mode)
-    elif operator == "timeline":
+    if operator == "timeline":
         mode = "timeline_scope_material"
         for row in rows:
             row.update(

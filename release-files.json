@@ -488,5 +488,10 @@
   "src/serein/extensions/pipeline_tracks.py",
   "tests/test_authored_mcp_parity.py",
   "tests/test_track_continuation_parity.py",
-  "src/serein/api/core_notebook_tools.py"
+  "src/serein/api/core_notebook_tools.py",
+  "src/serein/recall/person_references.py",
+  "tests/test_personal_recall.py",
+  "tests/test_automatic_scope_recall.py",
+  "web/src/utils/recallSimulationDiagnostics.js",
+  "web/tests/recall-simulation-diagnostics.test.mjs"
 ]

@@ -515,7 +515,8 @@ function normalizeSimulationTelemetrySnapshot(input, options = {}) {
     : budget.episode_verifier && typeof budget.episode_verifier === "object"
       ? budget.episode_verifier
       : {};
-  const routeScores = normalizedRouteScores(semantic.scores);
+  const router = semantic.semantic_recall_router ?? {};
+  const routeScores = normalizedRouteScores(semantic.scores ?? router.routes?.map((row) => ({...row, route: row.name})));
   const hasShape = Boolean(
     Object.keys(semantic).length
       || Object.keys(budget).length
@@ -530,13 +531,14 @@ function normalizeSimulationTelemetrySnapshot(input, options = {}) {
     schemaVersion: 1,
     ablationMode: normalizedAblationMode(ablation.mode || options.ablationMode),
     route: {
-      name: cleanText(semantic.route) || null,
-      action: cleanText(semantic.route_action) || null,
-      appliedAction: cleanText(semantic.applied_action) || null,
+      name: cleanText(semantic.route ?? router.route) || null,
+      action: cleanText(semantic.route_action ?? router.action) || null,
+      appliedAction: cleanText(semantic.applied_action ?? router.action) || null,
       recommendedAction: cleanText(semantic.recommended_action) || null,
       confidence: nullableNumber(semantic.confidence),
+      score: nullableNumber(semantic.score ?? router.score),
       margin: nullableNumber(semantic.margin),
-      reason: cleanText(semantic.reason) || null,
+      reason: cleanText(semantic.reason ?? router.reason) || null,
       skipApplied: normalizedDebugBoolean(semantic.skip_applied),
       routeSkipReason: cleanText(semantic.route_skip_reason) || null,
       scores: routeScores,

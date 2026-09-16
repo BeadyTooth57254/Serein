@@ -25,15 +25,17 @@ class CandidateGateway(GatewayService):
         raw_global_terms = specific_term_reader(query) if callable(specific_term_reader) else re.findall('[A-Za-z0-9_.-]{2,}|[\\u4e00-\\u9fff]{2,}', str(query or ''))
         specific_global_terms = [term for term in raw_global_terms if self._matched_query_term_is_specific(term)]
         deictic_scope_missing = bool(scope_status == 'insufficient_scope' and scope_operator in {'latest_relevant_member', 'timeline', 'member_search'})
-        narrative_scope_missing = bool(scope_status == 'insufficient_scope' and scope_operator == 'narrative_read')
-        global_named_fallback = bool(deictic_scope_missing and specific_global_terms)
+        # A name is a retrieval hint even without a recall phrase. Multiple
+        # possible Arc scopes fall back to ordinary global Event/Scene search.
+        global_named_fallback = bool((deictic_scope_missing or scope_status == 'ambiguous_scope') and specific_global_terms)
         if global_named_fallback:
-            entity_scope = {**entity_scope, 'status': 'global_recall', 'operator': 'none', 'retrieval_allowed': True, 'scope_fallback': 'specific_term_global_event_scene', 'decision_applied': False}
+            fallback = 'ambiguous_scope_global_event_scene' if scope_status == 'ambiguous_scope' else 'specific_term_global_event_scene'
+            entity_scope = {**entity_scope, 'status': 'global_recall', 'operator': 'none', 'retrieval_allowed': True, 'scope_fallback': fallback, 'decision_applied': False}
             scope_status = 'global_recall'
             scope_operator = 'none'
-        hard_scope_block = scope_status in {'scope_only', 'ambiguous_scope'} or bool(narrative_scope_missing or (deictic_scope_missing and (not global_named_fallback)))
-        if hard_scope_block or (not scope_arc_key and (not specific_global_terms) and (scope_status not in {'scoped_recall', 'scope_only', 'ambiguous_scope'})):
-            return {'status': 'not_retrieved', 'reason': 'entity_without_recall_intent' if scope_status == 'scope_only' else 'ambiguous_entity_scope' if scope_status == 'ambiguous_scope' else 'scope_required_for_deictic_intent' if hard_scope_block else 'global_query_lacks_specific_terms', 'mode': 'simulation_shadow', 'decision_applied': False, 'live_injection_enabled': False, 'entity_scope': entity_scope, 'candidate_count': 0, 'candidates': [], 'lanes': {'scene': {'matches': []}, 'event': {'matches': []}}}
+        hard_scope_block = bool(deictic_scope_missing and not global_named_fallback)
+        if hard_scope_block or (not scope_arc_key and not specific_global_terms):
+            return {'status': 'not_retrieved', 'reason': 'scope_required_for_deictic_intent' if hard_scope_block else 'global_query_lacks_specific_terms', 'mode': 'simulation_shadow', 'decision_applied': False, 'live_injection_enabled': False, 'entity_scope': entity_scope, 'candidate_count': 0, 'candidates': [], 'lanes': {'scene': {'matches': []}, 'event': {'matches': []}}}
         allowed_owner_keys = scope_members if scope_arc_key else {*(('scene', owner_id) for owner_id in global_scene_ids), *(('event', owner_id) for owner_id in global_event_ids)}
         allowed_scene_ids = {owner_id for kind, owner_id in allowed_owner_keys if kind == 'scene'}
         allowed_event_ids = {owner_id for kind, owner_id in allowed_owner_keys if kind == 'event'}

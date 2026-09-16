@@ -44,6 +44,7 @@ def routes(services,auth):
         char_limit=max(160,min(2400,int(body.get('max_chars',1200))))
         deadline=None if simulation else time.monotonic()+9.0
         result=services.recall(query,method='semantic',mode='surface',min_cosine=.5,limit=max(1,maximum),
+            user_utterance=True,
             delivered_ids=body.get('delivered_ids',[]),exclude_ids=body.get('exclude_ids',[]),
             use_passages=body.get('use_passages'),body_char_limit=char_limit,
             delivered_menu_keys=body.get('delivered_menu_keys',[]),recall_ablation=ablation,

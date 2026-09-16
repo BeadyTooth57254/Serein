@@ -9,31 +9,30 @@ from serein.recall.rendering import render, read_arc_picks
 from serein.recall.surface_gate import SurfaceGate
 
 
-def test_surface_gates_keep_memory_warrants_and_technical_chatter():
+@pytest.mark.parametrize('route', ['present_chitchat', 'present_reality', '技术闲聊', 'custom_skip'])
+def test_final_skip_cannot_be_overridden_by_route_category_or_memory_words(route):
     gate = SurfaceGate()
-    skip = {'route': 'present_chitchat', 'action': 'skip'}
-    assert gate.before_candidates('你好', skip)['applied']
-    for query in ('还记得那次吗', '请读《雨天相逢》', '为什么叫Astra'):
-        assert not gate.before_candidates(query, skip)['applied']
-    assert not gate.before_candidates('你好', {'route': '技术闲聊', 'action': 'skip'})['applied']
-    engine = gate.engine
-    debug = {'route': 'present_reality', 'route_action': 'skip'}
-    assert engine._typed_surface_reranker_gate('这是什么意思', {}, debug)['applied']
-    assert not engine._typed_surface_reranker_gate('这是什么意思', {}, debug,
-        owner_entity_matches=[{'owner_id': 'event_a'}])['applied']
-    assert engine._typed_surface_reranker_gate('你好', {}, debug,
+    skip = {'route': route, 'action': 'skip', 'reason': 'published_skip_route'}
+    for query in ('你好', '还记得那次吗', '请读《雨天相逢》', '为什么叫Astra'):
+        assert gate.before_candidates(query, skip)['applied']
+    assert gate.engine._typed_surface_reranker_gate('这是什么意思',
+        {'scope_anchor': {'arc_key': 'fixture'}}, gate.debug(skip),
+        candidates=[{'candidate_sources': ['scene_cue_candidate']}],
         owner_entity_matches=[{'owner_id': 'event_a'}])['applied']
 
 
-def test_uncertain_skip_route_retains_old_surface_gates():
+def test_uncertain_route_is_not_overridden_by_the_winning_skip_template():
     gate = SurfaceGate()
     decision = {'route':'present_chitchat', 'action':'recall', 'reason':'uncertain_route',
                 'scores':[{'name':'present_chitchat','action':'skip','score':.43,'threshold':.6}]}
     debug = gate.debug(decision)
-    assert debug['route_action'] == 'skip' and debug['applied_action'] == 'recall'
-    assert gate.before_candidates('怎么会有Assistant这种萌物呢', decision)['applied']
+    assert debug['route_action'] == debug['applied_action'] == 'recall'
+    assert debug['template_action'] == 'skip'
+    before = gate.before_candidates('那个安排还算数吧', decision)
+    assert not before['applied'] and before['route_action'] == 'recall'
+    assert before['template_action'] == 'skip'
     assert not gate.before_candidates('还记得那次吗', decision)['applied']
-    assert gate.after_candidates('这是什么意思', decision, [])['applied']
+    assert not gate.after_candidates('这是什么意思', decision, [])['applied']
     technical = {**decision, 'route':'技术闲聊',
                  'scores':[{'name':'技术闲聊','action':'skip','score':.43,'threshold':.6}]}
     assert not gate.before_candidates('正在修自动切分的bug', technical)['applied']
