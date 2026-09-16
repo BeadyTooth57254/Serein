@@ -133,6 +133,13 @@ class TaskClient:
         extra = payload.pop('extra_body', None)
         if extra:
             payload.update(extra)
+        if self.task == 'persona':
+            # The retained Persona engine carries a legacy generic thinking
+            # option. Replace it with only the control supported by this
+            # provider; unknown providers receive no private reasoning fields.
+            for key in ('thinking','reasoning','enable_thinking'):
+                payload.pop(key,None)
+            payload.update(non_thinking_options(model))
         import asyncio
         timeout = payload.pop('timeout', 120)
         result=await asyncio.wait_for(complete(model,payload), timeout=timeout)

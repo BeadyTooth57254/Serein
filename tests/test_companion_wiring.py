@@ -32,6 +32,7 @@ def test_real_proxy_persona_cadence_context_and_tool_continuation(deployment,mon
     def handle(request):
         body=json.loads(request.content)
         if body['model']=='persona-model':
+            assert not {'thinking','reasoning','enable_thinking'} & body.keys()
             evaluations.append(json.loads(body['messages'][1]['content']))
             return httpx.Response(200,json={'choices':[{'message':{'content':json.dumps(evaluation())}}]})
         calls.append(body)
@@ -86,6 +87,7 @@ def test_streaming_memo_consumption_and_persona_only_after_final_reply(deploymen
     def handle(request):
         body=json.loads(request.content)
         if body['model']=='persona-model':
+            assert not {'thinking','reasoning','enable_thinking'} & body.keys()
             evaluations.append(body)
             return httpx.Response(200,json={'choices':[{'message':{'content':json.dumps(evaluation())}}]})
         assert '合成流式提醒' in json.dumps(body,ensure_ascii=False)

@@ -500,3 +500,29 @@ def test_native_task_options_and_cache_validation(deployment):
     assert deepseek_anthropic['reasoning']=={'effort':'none'}
     with pytest.raises(ValueError):ModelEntry(**model,prompt_cache='openai')
     with pytest.raises(ValueError):ModelEntry(**model,prompt_cache='anthropic',prompt_cache_retention='24h')
+
+
+@pytest.mark.parametrize('model,expected',[
+    ({'model':'deepseek-chat','base_url':'https://api.deepseek.com/v1','protocol':'openai'},
+     {'thinking':{'type':'disabled'}}),
+    ({'model':'deepseek-ai/DeepSeek-V4-Flash','base_url':'https://api.siliconflow.cn/v1','protocol':'openai'},
+     {'enable_thinking':False}),
+    ({'model':'deepseek-chat','base_url':'https://api.deepseek.com/anthropic','protocol':'anthropic'},
+     {'reasoning':{'effort':'none'}}),
+    ({'model':'ordinary','base_url':'https://provider.example/v1','protocol':'openai'},{}),
+])
+def test_persona_task_replaces_legacy_thinking_with_provider_option(deployment,monkeypatch,model,expected):
+    import asyncio
+    from serein.model_runtime import TaskClient
+    settings,_=deployment;captured=[]
+    selected={**model,'id':'persona','label':'Persona','api_key':''}
+    monkeypatch.setattr('serein.model_runtime.task_model',lambda database,task:selected)
+    async def complete(chosen,payload,**options):
+        captured.append(payload)
+        return {'choices':[{'message':{'content':'{}'}}]}
+    monkeypatch.setattr('serein.model_runtime.complete',complete)
+    asyncio.run(TaskClient(settings.database,'persona').create(messages=[],
+        extra_body={'thinking':{'type':'disabled'}},response_format={'type':'json_object'}))
+    private={key:captured[0][key] for key in ('thinking','reasoning','enable_thinking') if key in captured[0]}
+    assert private==expected
+    assert captured[0]['response_format']=={'type':'json_object'}
