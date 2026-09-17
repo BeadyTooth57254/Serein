@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 from serein.api.http import create_app
 from serein.api.mcp import create_server
+from serein.api.read_text import diary_text
 from serein.application import Application
 from serein.bootstrap import initialize
 from serein.config import Settings
@@ -22,6 +23,14 @@ def runtime(tmp_path):
     save_settings(settings.database, {'pipeline': {'auto_enabled': False},
                                       'identity': {'ai_name': 'Synthetic Companion'}})
     return settings
+
+
+def test_diary_text_includes_original_binding_and_timestamp():
+    text = diary_text({'diaries': [{'id': 7, 'entry_type': 'diary', 'title': 'Rain',
+        'date': '2026-09-17', 'created_at': '2026-09-17T01:02:03+08:00',
+        'content': 'Body', 'comments': [], 'source_id': 'legacy-diary:7'}]})
+    assert 'created_at: 2026-09-17T01:02:03+08:00' in text
+    assert 'bound_sources: 1' in text and '[source 1] source_id=legacy-diary:7' in text
 
 
 def call(server, name, **args):
@@ -135,6 +144,8 @@ def test_http_diary_self_use_flow_and_locked_rejections(runtime):
         key = entry['id']
         assert entry['author'] == 'ai'
         assert 'body:\nSynthetic diary' in rpc('read_diary', {'diary_id': key})
+        diary_text = rpc('read_diary', {'diary_id': key})
+        assert 'created_at:' in diary_text and 'bound_sources: 0' in diary_text
         assert 'count: 1' in rpc('read_diary', {'date': entry['date']})
         assert rpc('revise_diary', {'diary_id': key, 'content': 'Revised'})['revision'] == 2
         rpc('comment_diary', {'diary_id': key, 'content': 'Comment'})

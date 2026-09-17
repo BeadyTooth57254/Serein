@@ -103,7 +103,7 @@ material_count: 3
 [0] narrative: 第一次旅行 (id=narrative_demo_trip)
 [1] scene: 留下的车票 (id=scene_demo_ticket)
 [2] event: 出发前的安排 (id=event_demo_plan)
-使用 read_arc_materials(arc_key="trip:first-journey", picks=[编号]) 一次读取最多5项。
+使用 read_arc_materials(identifier="trip:first-journey", picks=[编号]) 一次读取最多5项。
 [/arc_materials]
 ```
 
@@ -114,7 +114,7 @@ Event 使用同样的文本块结构，`ref` 以 `event:` 开头。没有明确�
 | 想继续看什么 | 工具 |
 | --- | --- |
 | 这条记忆的全文及其绑定原话 | `read_memory(identifier="scene:scene_demo_ticket", with_evidence=True)` |
-| 目录中的某份材料 | `read_arc_materials(arc_key="trip:first-journey", picks=[2])` |
+| 目录中的某份材料 | `read_arc_materials(identifier="trip:first-journey", picks=[2])` |
 | 按关键词、日期或说话者找原话 | `source_message_search`，查到后用 `source_message_read` 按原话 ID 读取，可带前后消息 |
 
 原话查阅需开启对应功能；没有绑定的原话不会被凭空补出。Arc 的材料编号要从当前目录复制，**编号不等于材料 ID，也不等于材料总数**。长结果按工具返回的游标继续读取。字段与分页约定见 [工具说明](docs/public-feature-contracts.md)。

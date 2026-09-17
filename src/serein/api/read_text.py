@@ -63,7 +63,7 @@ def narrative_menu_lines(menu: dict[str, Any]) -> list[str]:
         lines.append(f"[{item['index']}] {item['kind']}: {item.get('title') or item['id']}{day} (id={item['id']})")
     if menu.get("menu_truncated"):
         lines.append("menu_truncated: true")
-    lines.extend((f'Use read_arc_materials(arc_key="{key}", picks=[numbers]) to read up to 5 items.',
+    lines.extend((f'Use read_arc_materials(identifier="{key}", picks=[numbers]) to read up to 5 items.',
                   "[/narrative_menu]"))
     return lines
 
@@ -162,9 +162,16 @@ def diary_text(result: dict[str, Any]) -> str:
                       f"date: {item.get('date') or ''}", f"revision: {item.get('revision') or 1}"))
         if item.get("updated_at"):
             lines.append(f"updated_at: {item['updated_at']}")
+        if item.get("created_at"):
+            lines.append(f"created_at: {item['created_at']}")
         if item.get("author"):
             lines.append(f"author: {item['author']}")
-        lines.extend(("body:", str(item.get("content") or "").strip(), *comment_lines(item), "bound_sources: 0"))
+        lines.extend(("body:", str(item.get("content") or "").strip(), *comment_lines(item)))
+        source_id = str(item.get("source_id") or "").strip()
+        if source_id:
+            lines.extend(("bound_sources: 1", f"[source 1] source_id={source_id}"))
+        else:
+            lines.append("bound_sources: 0")
     lines.append("[/diary_list]")
     return "\n".join(lines)
 
