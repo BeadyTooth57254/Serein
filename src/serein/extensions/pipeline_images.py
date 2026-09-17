@@ -105,6 +105,22 @@ def decision(output):
     return {key: value for key, value in output.items() if key != 'image_transcriptions'}
 
 
+def verify_transcriptions(transcriptions, images):
+    """Require exact coverage, unchanged bytes and unchanged evidence roles."""
+    verify_images(images)
+    actual = {(item['source_message_id'], item['position']): item for item in images}
+    seen = set()
+    for row in transcriptions:
+        key = (row['source_message_id'], row['position'])
+        image = actual.get(key)
+        if (key in seen or image is None or row['sha256'] != image['sha256']
+                or row['evidence_role'] != image['evidence_role']):
+            raise ValueError('Writer 转录与绑定图片的字节或阅读范围不匹配')
+        seen.add(key)
+    if seen != set(actual):
+        raise ValueError('Writer 转录必须覆盖全部绑定图片')
+
+
 def expire_completed_media(store):
     """Only disposable task copies expire. Canonical raw attachments remain intact."""
     def strip(value,key=''):

@@ -12,6 +12,43 @@ from test_event_handoff import PNG
 from test_public_features import output_for, settings
 
 
+def test_curator_reread_adds_transcribed_context_before_text_only_writer(settings,monkeypatch):
+    from test_public_features import ingest
+    configure(settings)
+    ingest(settings)
+    seen=[];context_ids=[]
+    def reread(database,component,query):
+        import copy
+        reading=copy.deepcopy(component)
+        raw_archive(settings).ingest([{'source_event_id':'context-image','session_id':'earlier',
+            'role':'user','text':'Earlier picture','created_at':'2024-12-31T00:00:00Z',
+            'metadata':{'attachments':[{'kind':'image','url':PNG}]}}],source='synthetic-context')
+        with Store(database,read_only=True) as store:
+            context_id=store.conn.execute("SELECT id FROM raw_events WHERE source_event_id='context-image'").fetchone()[0]
+        context_ids.append(context_id)
+        reading['context_messages'].append({**reading['messages'][0],'id':context_id,'content':'Earlier picture',
+            'metadata':{'attachments':[{'kind':'image','url':PNG}]}})
+        return reading
+    monkeypatch.setattr(p,'extend_context',reread)
+    async def runner(role,request):
+        if request.get('transcription_only'):
+            seen.append('transcription')
+            return {'image_transcriptions':[{'input_image':1,'text':'[画面] A lamp on a desk.','unreadable':False}]}
+        if role=='event_curator' and not request.get('context_read'):
+            return {'context_request':{'track_id':request['component']['track_ids'][0],
+                'before_message_id':request['component']['messages'][0]['id'],'reason':'missing_subject'}}
+        if role=='event_curator':
+            assert request['images']==[] and 'A lamp on a desk' in request['prompt']
+        if role=='event_writer':
+            seen.append('writer')
+            assert request['images']==[] and 'A lamp on a desk' in request['prompt']
+            assert request['curator_image_transcriptions'][0]['evidence_role']=='context_only'
+            assert context_ids[0] not in request['event']['source_message_ids']
+        return output_for(role,request)
+    assert asyncio.run(p.advance(settings.database,include_recent=True,runner=runner))['events']==1
+    assert seen==['transcription','writer']
+
+
 def configure(settings, *, feature=False):
     changes = {
         'models': [{'id':'vision','model':'agnes-3.0-flash','base_url':'http://127.0.0.1:9/v1'}],
@@ -60,6 +97,10 @@ def test_pipeline_uses_separate_image_model_and_persists_transcription(settings,
             request=json.loads(store.conn.execute(
                 'SELECT request_json FROM pipeline_jobs WHERE output_json IS NULL ORDER BY rowid DESC LIMIT 1').fetchone()[0])
         seen.append(request['execution']['task'])
+        if request['role']=='event_writer':
+            assert request['images']==[] and request['image_input_mode']=='transcriptions_only'
+            assert isinstance(payload['messages'][1]['content'],str)
+            assert 'Visible title' in payload['messages'][1]['content']
         if request.get('transcription_only'):
             output={'image_transcriptions':[{'input_image':index,'text':'Visible title','unreadable':False}
                                              for index,_ in enumerate(request['images'],1)]}

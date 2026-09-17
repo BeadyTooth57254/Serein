@@ -2,7 +2,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {fileURLToPath} from 'node:url';
 import {callSereinBackend} from '../server/sereinBackend.mjs';
-import {buildNarrativeTaskPrompt,maxNarrativeBodyChars,normalizeNarrativeWriterResult,runNarrativeCodexTask} from '../server/narrativeCodexRunner.mjs';
+import {buildNarrativeTaskPrompt,normalizeNarrativeWriterResult,runNarrativeCodexTask} from '../server/narrativeCodexRunner.mjs';
 import {buildSceneEvidenceRefs} from '../server/sceneEvidenceBridge.mjs';
 import {resolveGatewayObservationOutcome,gatewayRequestLabel,resolveBridgeObservationOutcome} from '../src/recallObservationOutcome.js';
 import {readFileSync} from 'node:fs';
@@ -52,15 +52,16 @@ test('writer preserves update and rewrite material boundaries',()=>{
   const focused = JSON.parse(focusedPrompt.split('<narrative_writer_input_json>')[1].split('</narrative_writer_input_json>')[0]);
   assert.equal(focused.writing_focus.length,500);
 });
-test('writer enforces a 500-character body and source-bound speech acts',()=>{
+test('writer preserves long source-bound narrative bodies',()=>{
   const roleRules=readFileSync(new URL('../codex_agents/narrative_writer/AGENTS.md',import.meta.url),'utf8');
-  assert.equal(maxNarrativeBodyChars,500);
   assert.match(roleRules,/Do not infer speech acts/);
-  assert.match(roleRules,/no more than 500 characters/);
+  assert.doesNotMatch(roleRules,/no more than \d+ characters/);
+  const schema=JSON.parse(readFileSync(new URL('../codex_agents/narrative_writer/output.schema.json',import.meta.url),'utf8'));
+  assert.deepEqual(schema.properties.body,{type:'string'});
   const self_review={source_bound:true,final_supported_versions:true,no_correction_narration:true,material_relevance:true,
     no_new_inference:true,no_meta_explanation:true,no_forced_closure:true,dates_preserved:true,identity_correct:true};
-  assert.equal(normalizeNarrativeWriterResult({evidence_sufficient:true,body:'x'.repeat(500),issues:[],self_review}).body.length,500);
-  assert.throws(()=>normalizeNarrativeWriterResult({evidence_sufficient:true,body:'x'.repeat(501),issues:[],self_review}),/narrative_writer_body_too_long/);
+  const body='The story continues.\n'.repeat(600)+'🌧️ A final paragraph.';
+  assert.equal(normalizeNarrativeWriterResult({evidence_sufficient:true,body,issues:[],self_review}).body,body);
 });
 test('writer disabled means no runner starts',async()=>{
   delete process.env.SEREIN_WRITER_ENABLED;

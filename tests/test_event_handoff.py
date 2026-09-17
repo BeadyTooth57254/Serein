@@ -6,7 +6,7 @@ from test_public_features import settings, ingest, output_for
 from serein.core.store import Store, Conflict
 from serein.deployment import save_settings, read_settings
 from serein.extensions import pipeline as p, pipeline_latest as latest
-from serein.extensions.pipeline_images import freeze_images, bind_transcriptions, verify_images
+from serein.extensions.pipeline_images import freeze_images, bind_transcriptions, verify_images, verify_transcriptions
 
 PNG='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX1cAAAAASUVORK5CYII='
 
@@ -26,12 +26,12 @@ def test_three_stage_image_chain_preserves_bytes_transcription_and_raw_sources(s
     def check(request):
         role=request['role'];seen.append(role)
         assert role in ('track_router','event_curator','event_writer')
-        if role!='track_router':
+        if role=='event_curator':
             assert request['images'][0]['url']==PNG and request['images'][0]['sha256']==sha
             assert request['images'][0]['source_message_id']==1
             assert PNG not in request['prompt']
         if role=='event_writer':
-            assert request['images'][0]['evidence_role']=='owned'
+            assert request['images']==[] and request['image_input_mode']=='transcriptions_only'
             assert request['curator_image_transcriptions']==[{'source_message_id':1,'position':1,'sha256':sha,
                 'evidence_role':'owned','text':'Visible book title','unreadable':False}]
         return output_for(role,request)
@@ -39,7 +39,9 @@ def test_three_stage_image_chain_preserves_bytes_transcription_and_raw_sources(s
         assert mode=='api','Agent mode must not call the API'
         with Store(settings.database,read_only=True) as store:
             request=json.loads(store.conn.execute('SELECT request_json FROM pipeline_jobs WHERE output_json IS NULL ORDER BY rowid DESC LIMIT 1').fetchone()[0])
-        if request['role']!='track_router':assert payload['messages'][1]['content'][1]['image_url']['url']==PNG
+        if request['role']=='event_curator':assert payload['messages'][1]['content'][1]['image_url']['url']==PNG
+        if request['role']=='event_writer':
+            assert isinstance(payload['messages'][1]['content'],str) and PNG not in payload['messages'][1]['content']
         result=check(request)
         if request['role']=='event_writer' and seen.count('event_writer')==1:result['event_draft']='字'*1200
         return {'choices':[{'message':{'content':json.dumps(result)}}]}
@@ -101,6 +103,9 @@ def test_images_are_frozen_and_transcriptions_cannot_claim_provenance():
     bound=bind_transcriptions(output,images)
     assert bound[0]['source_message_id']==7 and len(bound[0]['sha256'])==64
     assert bound[0]['text']=='Visible original'
+    verify_transcriptions(bound,images)
+    for invalid in ([],bound*2,[{**bound[0],'sha256':'0'*64}],[{**bound[0],'evidence_role':'owned'}]):
+        with pytest.raises(ValueError):verify_transcriptions(invalid,images)
     for entries in ([],output['image_transcriptions']*2,[{**output['image_transcriptions'][0],'source_message_id':99}]):
         with pytest.raises(ValueError):bind_transcriptions({'image_transcriptions':entries},images)
     images[0]['sha256']='0'*64
@@ -163,7 +168,8 @@ def test_writer_bounded_reread_gets_new_context_images_without_owning_them(setti
         if role=='event_writer':
             seen.append('writer')
             assert 99 not in request['event']['source_message_ids']
-            assert request['images'][0]['evidence_role']=='context_only'
+            assert request['images']==[]
+            assert request['curator_image_transcriptions'][0]['evidence_role']=='context_only'
             assert request['curator_image_transcriptions'][0]['text']=='Earlier title'
             with pytest.raises(ValueError):p.validate(request,{'context_request':{'track_id':request['component']['track_ids'][0],'before_message_id':1,'reason':'missing_subject'}})
         return output_for(role,request)

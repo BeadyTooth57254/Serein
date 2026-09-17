@@ -16,7 +16,6 @@ const reviewKeys = [
   "identity_correct",
 ];
 
-export const maxNarrativeBodyChars = 500;
 
 export function writerImageInputs(materials) {
   const receipts = [], unresolved = [];
@@ -109,9 +108,6 @@ export function normalizeNarrativeWriterResult(value) {
   }
   const body = result.body.trim();
   const issues = result.issues.map((item) => item.trim()).filter(Boolean);
-  if (Array.from(body).length > maxNarrativeBodyChars) {
-    throw new Error("narrative_writer_body_too_long");
-  }
   if (result.evidence_sufficient && (!body || issues.length || reviewKeys.some((key) => !review[key]))) {
     throw new Error("narrative_writer_sufficient_result_invalid");
   }

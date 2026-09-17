@@ -61,7 +61,7 @@ def test_three_stages_and_writer_sees_exact_predecessor_originals(settings):
     task=asyncio.run(p.advance(settings.database,include_recent=True));prompt=task['request']['prompt']
     assert len(task['request']['messages'])==4
     assert task['role']=='event_writer' and 'Book club plan 1' in prompt and 'Book club plan 2' in prompt
-    assert '<previous_events_json>' in prompt and '正文上限：320 字' in prompt
+    assert '<previous_events_json>' in prompt and '正文上限：450 字' in prompt
     with Store(settings.database) as store:
         detail=json.loads(store.conn.execute('SELECT details_json FROM pipeline_event_details').fetchone()[0])
         assert 'evidence' not in detail
@@ -86,13 +86,13 @@ def test_writer_body_limit_counts_characters_without_a_minimum():
     output=output_for('event_writer',request)
     output['event_draft']='书还了。'
     assert latest.validate_event_writer_result(output)==[]
-    output['event_draft']='书'*320
+    output['event_draft']='书'*450
     assert latest.validate_event_writer_result(output)==[]
-    output['event_draft']=' \n'+'书'*320+'\n '
+    output['event_draft']=' \n'+'书'*450+'\n '
     assert latest.validate_event_writer_result(output)==[]
-    output['event_draft']='书'*318+'\n。A'
-    assert '正文超过 320 字上限：321 字' in ' '.join(latest.validate_event_writer_result(output))
-    assert len(output['event_draft'])==321
+    output['event_draft']='书'*448+'\n。A'
+    assert '正文超过 450 字上限：451 字' in ' '.join(latest.validate_event_writer_result(output))
+    assert len(output['event_draft'])==451
     output['title']=''
     assert '标题为空' in latest.validate_event_writer_result(output)
 
@@ -103,8 +103,8 @@ def test_overlong_agent_draft_cannot_settle_or_be_silently_truncated(settings):
     p.submit(settings.database,curator['job_id'],output_for(curator['role'],curator['request']))
     task=asyncio.run(p.advance(settings.database,include_recent=True))
     output=output_for('event_writer',task['request'])
-    output['event_draft']='书'*321
-    with pytest.raises(ValueError,match='正文超过 320 字上限'):
+    output['event_draft']='书'*451
+    with pytest.raises(ValueError,match='正文超过 450 字上限'):
         p.submit(settings.database,task['job_id'],output)
     with Store(settings.database,read_only=True) as store:
         assert store.conn.execute('SELECT output_json FROM pipeline_jobs WHERE id=?',(task['job_id'],)).fetchone()[0] is None
@@ -210,7 +210,7 @@ def test_configured_names_are_literal_values_not_recursive_templates(settings):
     assert 'NewReader把台灯送修' in rules and 'NewGuide' in rules
 
 
-def test_images_keep_ownership_and_are_attached_to_model_payload(settings,monkeypatch):
+def test_images_keep_ownership_and_only_curator_receives_pixels(settings,monkeypatch):
     uri='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX1cAAAAASUVORK5CYII='
     raw_archive(settings).ingest([
         {'source_event_id':'u','session_id':'image','role':'user','text':'This is the book','created_at':'2025-01-01T00:00:00Z','metadata':{'attachments':[{'kind':'image','url':uri,'mime_type':'image/png'}]}},
@@ -218,9 +218,13 @@ def test_images_keep_ownership_and_are_attached_to_model_payload(settings,monkey
     save_settings(settings.database,{'models':[{'id':'local','model':'synthetic','base_url':'http://127.0.0.1:9/v1'}],'assignments':{r:'local' for r in p.ROLES}})
     async def complete(model,payload):
         with Store(settings.database,read_only=True) as store:request=json.loads(store.conn.execute('SELECT request_json FROM pipeline_jobs WHERE output_json IS NULL ORDER BY rowid DESC LIMIT 1').fetchone()[0])
-        if request['role']=='event_writer':
-            assert request['images'][0]['evidence_role']=='owned'
+        if request['role']=='event_curator':
+            assert request['images'][0]['evidence_role']=='stable'
             assert payload['messages'][1]['content'][1]['image_url']['url']==uri
+        if request['role']=='event_writer':
+            assert request['images']==[]
+            assert request['curator_image_transcriptions'][0]['evidence_role']=='owned'
+            assert isinstance(payload['messages'][1]['content'],str) and uri not in payload['messages'][1]['content']
         return {'choices':[{'message':{'content':json.dumps(output_for(request['role'],request))}}]}
     monkeypatch.setattr('serein.model_runtime.complete',complete)
     assert asyncio.run(p.advance(settings.database,include_recent=True))['events']==1

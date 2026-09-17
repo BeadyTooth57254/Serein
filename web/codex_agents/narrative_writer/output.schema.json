@@ -5,7 +5,7 @@
   "required": ["evidence_sufficient", "body", "issues", "self_review"],
   "properties": {
     "evidence_sufficient": { "type": "boolean" },
-    "body": { "type": "string", "maxLength": 500 },
+    "body": { "type": "string" },
     "issues": {
       "type": "array",
       "items": { "type": "string" }
