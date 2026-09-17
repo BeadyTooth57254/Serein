@@ -497,5 +497,12 @@
   "tests/test_automatic_scope_recall.py",
   "src/serein/api/read_text.py",
   "web/src/utils/recallSimulationDiagnostics.js",
-  "web/tests/recall-simulation-diagnostics.test.mjs"
+  "web/tests/recall-simulation-diagnostics.test.mjs",
+  "src/serein/api/oauth.py",
+  "tests/test_mcp_oauth.py",
+  "tests/test_image_transcription_settings.py",
+  "web/src/storage/settingsError.js",
+  "web/src/upstreamSecrets.js",
+  "web/tests/instance-store.test.mjs",
+  "web/tests/upstream-secrets.test.mjs"
 ]

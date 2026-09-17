@@ -23,7 +23,10 @@ test('gateway separates web auth from API auth, saves settings and streams respo
   const requests=[];
   const core=http.createServer((req,res)=>{
     if(req.url==='/health'){res.setHeader('Content-Type','application/json');res.end('{"status":"ok"}');return;}
-    requests.push({path:req.url,auth:req.headers.authorization,method:req.method,forwardedHost:req.headers['x-forwarded-host'],protocol:req.headers['mcp-protocol-version']});
+    requests.push({path:req.url,auth:req.headers.authorization,method:req.method,forwardedHost:req.headers['x-forwarded-host'],forwardedProto:req.headers['x-forwarded-proto'],protocol:req.headers['mcp-protocol-version']});
+    if(req.url.startsWith('/.well-known/oauth-') || ['/authorize','/token','/register'].includes(req.url)){
+      res.writeHead(req.url==='/register'?201:200,{'Content-Type':'application/json'});res.end('{"oauth":true}');return;
+    }
     if(req.headers.authorization!=='Bearer synthetic-api-key'){res.writeHead(401);res.end('{}');return;}
     if(req.url==='/api/hook/recall'){
       let raw='';req.on('data',chunk=>raw+=chunk);req.on('end',()=>{
@@ -76,6 +79,7 @@ test('gateway separates web auth from API auth, saves settings and streams respo
   const child=spawn(process.execPath,['server/gateway.mjs'],{cwd:new URL('../',import.meta.url),stdio:['ignore','pipe','pipe'],env:{...process.env,
     SEREIN_MEMORY_URL:`http://127.0.0.1:${core.address().port}`,SEREIN_MEMORY_TOKEN_FILE:join(dir,'token'),
     SEREIN_WEB_AUTH_FILE:join(dir,'auth.json'),SEREIN_GATEWAY_PORT:String(port),SEREIN_GATEWAY_BIND:'127.0.0.1',SEREIN_PREVIEW_PORT:String(preview),
+    SEREIN_PUBLIC_ORIGIN:'https://memory.example',
     SEREIN_LEGACY_SOURCE_HOST:dir}});
   let output='';child.stdout.on('data',d=>output+=d);child.stderr.on('data',d=>output+=d);
   const base=`http://127.0.0.1:${port}`;
@@ -88,6 +92,11 @@ test('gateway separates web auth from API auth, saves settings and streams respo
     assert.ok(started,output);
     assert.equal((await fetch(base)).status,401);
     assert.equal((await fetch(base+'/ready')).status,200);
+    for(const [path,method] of [['/.well-known/oauth-protected-resource','GET'],['/.well-known/oauth-authorization-server','GET'],['/register','POST'],['/authorize','GET'],['/token','POST']]){
+      const response=await fetch(base+path,{method,headers:method==='POST'?{'Content-Type':'application/json'}:{},body:method==='POST'?'{}':undefined});
+      assert.ok([200,201].includes(response.status));
+      assert.ok(requests.some(r=>r.path===path&&r.method===method&&r.forwardedHost==='memory.example'&&r.forwardedProto==='https'));
+    }
     const auth={Authorization:basic('password-one')};
     const page=await fetch(base,{headers:auth});assert.equal(page.status,200);
     assert.ok(!(await page.text()).includes('synthetic-api-key'));
@@ -218,7 +227,7 @@ test('gateway separates web auth from API auth, saves settings and streams respo
       for (const method of ['POST', 'GET', 'DELETE']) {
         const headers={Authorization:'Bearer synthetic-api-key','Content-Type':'application/json','Mcp-Protocol-Version':'2025-03-26',Origin:base};
         assert.equal((await fetch(base+path,{method,headers,body:method==='POST'?'{}':undefined})).status,200);
-        assert.ok(requests.some(r=>r.path===path&&r.method===method&&r.auth==='Bearer synthetic-api-key'&&r.forwardedHost===new URL(base).host&&r.protocol==='2025-03-26'));
+        assert.ok(requests.some(r=>r.path===path&&r.method===method&&r.auth==='Bearer synthetic-api-key'&&r.forwardedHost==='memory.example'&&r.forwardedProto==='https'&&r.protocol==='2025-03-26'));
       }
       assert.equal((await fetch(base+path,{method:'POST',headers:{Authorization:'Bearer synthetic-api-key',Origin:'https://foreign.invalid'},body:'{}'})).status,403);
     }

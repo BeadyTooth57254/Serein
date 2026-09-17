@@ -46,7 +46,9 @@ def create_app(settings, *, token: str, live: bool=False):
     application = Application(settings)
     services = application.services
     from .mcp import create_server
+    from starlette.requests import Request
     from starlette.routing import Route
+    from .oauth import SCOPE, _external_origin, routes as oauth_routes
     mcp_server = create_server(application, http=True)
     mcp_transport = mcp_server.streamable_http_app()
     @asynccontextmanager
@@ -57,15 +59,29 @@ def create_app(settings, *, token: str, live: bool=False):
                 yield
 
     app = FastAPI(title='Serein', docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
+    oauth_router, oauth_store = oauth_routes(settings.database, token)
+    app.include_router(oauth_router)
 
     class AuthenticatedMCP:
         async def __call__(self, scope, receive, send):
             from starlette.datastructures import Headers
             from urllib.parse import urlsplit
             headers = Headers(scope=scope)
-            if not hmac.compare_digest(headers.get('authorization', '').encode(), ('Bearer '+token).encode()):
+            path = scope.get('path', '').rstrip('/')
+            try:
+                origin_url = _external_origin(Request(scope))
+                resource = origin_url + path
+                metadata_url = origin_url + '/.well-known/oauth-protected-resource' + path
+            except ValueError:
+                await JSONResponse({'detail':'Invalid public host'}, status_code=400)(scope, receive, send)
+                return
+            authorization = headers.get('authorization', '')
+            supplied = authorization[7:] if authorization.startswith('Bearer ') else ''
+            static_ok = hmac.compare_digest(authorization.encode(), ('Bearer '+token).encode())
+            oauth_ok = bool(supplied) and oauth_store.valid_access_token(supplied, resource)
+            if not static_ok and not oauth_ok:
                 response = JSONResponse({'detail':'Authentication required'}, status_code=401,
-                                        headers={'WWW-Authenticate':'Bearer'})
+                    headers={'WWW-Authenticate':f'Bearer resource_metadata="{metadata_url}", scope="{SCOPE}"'})
                 await response(scope, receive, send)
                 return
             # Gateway overwrites X-Forwarded-Host; direct core clients use Host.

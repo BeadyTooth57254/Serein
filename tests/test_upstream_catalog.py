@@ -89,6 +89,9 @@ def test_upstream_keys_survive_save_and_alias_conflicts_are_atomic(deployment):
     public[0]['name']='renamed-provider'
     assert client.patch('/v1/settings',json={'upstreams':public}).status_code==200
     assert task_model(settings.database,'chat',requested='a-smart')['api_key']=='synthetic-a-secret'
+    public[0]['api_key']='synthetic-replacement-secret'
+    assert client.patch('/v1/settings',json={'upstreams':public}).status_code==200
+    assert task_model(settings.database,'chat',requested='a-smart')['api_key']=='synthetic-replacement-secret'
     duplicate=[{**upstreams()[0],'models':['same']},{**upstreams()[1],'models':['same']}]
     assert client.patch('/v1/settings',json={'upstreams':duplicate}).status_code==400
     assert client.get('/v1/models').json()['data'][0]['id']=='renamed-provider/chat-fast'

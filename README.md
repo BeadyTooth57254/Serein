@@ -265,10 +265,11 @@ bash scripts/one_click.sh
 | 客户端连接 | 填写内容 |
 | --- | --- |
 | OpenAI 兼容聊天 API | Base URL 如 `https://你的域名/v1`，API Key 输入框填安装时生成的完整 Gateway Key，不加 `Bearer` 前缀 |
-| 远程 MCP | 服务器 URL 如 `https://你的域名/serein/mcp`，选择 Streamable HTTP；请求头为 `Authorization: Bearer <Gateway Key>`，替换占位文字及尖括号；旧 `/mcp` 仍兼容 |
+| 远程 MCP · OAuth | 服务器 URL 填 `https://你的域名/serein/mcp`，传输选 Streamable HTTP、身份验证选 OAuth；浏览器授权页中输入 Gateway Key 并确认 |
+| 远程 MCP · 静态 Key | 不支持 OAuth、但可自定义请求头的客户端，仍使用 `Authorization: Bearer <Gateway Key>`；旧 `/mcp` 兼容 |
 | 页面登录 | 安装时设置的用户名和密码，与 Gateway Key 不同 |
 
-直接访问 IP 时，将 `https://你的域名` 换成实际入口，如 `http://公网IP:网关端口`。MCP 与聊天 API 共用同一个 Gateway Key，可从安装完成的终端输出、`deploy/connection-guide.txt` 或 `deploy/secrets/api-token` 读取；主菜单 6 是更换 Key，查看现有 Key 无需更换。模型厂商的 API Key 仅填在 **设置 → 模型**，不要填到连接 Serein 的客户端中。网页 **使用说明 → 接入** 提供公网 IP 和域名的连接地址模板及填写方法。
+OAuth 按规范只在 HTTPS 域名（或本机 localhost）上授权；直接使用公网 IP 的 HTTP 入口时，使用支持自定义请求头的静态 Key 方式。MCP OAuth 会自动发现授权端点，使用 PKCE；Gateway Key 只输入 Serein 自己的授权页，不放进服务器 URL、回调 URL或客户端名称。静态 MCP 与聊天 API 继续共用 Gateway Key，可从安装输出、`deploy/connection-guide.txt` 或 `deploy/secrets/api-token` 读取。主菜单 6 更换 Key 后，旧静态 Key 和已发放的 OAuth code/token 都会失效。模型厂商的 API Key 仅填在 **设置 → 模型**。
 
 新窗口需要独立的 `X-Serein-Window-ID`；未填写时使用默认会话，共用召回冷却。开启开窗续接后，可自选带入最近 1–50 条原话；“最近原话”和“尚未整理的原话”互斥，打开一个会关闭另一个。在经过网关的聊天中发送 `/resume`，也可以在指令后接上想聊的话。[模型与客户端配置](docs/model-settings.md)
 

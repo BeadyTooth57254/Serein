@@ -61,6 +61,7 @@ def command(deploy, service):
                SEREIN_PREVIEW_PORT=str(config['preview_port']),
                SEREIN_GATEWAY_PORT=values['SEREIN_PORT'],
                SEREIN_GATEWAY_BIND=values['SEREIN_BIND'],
+               SEREIN_PUBLIC_ORIGIN=values.get('SEREIN_PUBLIC_ORIGIN',''),
                SEREIN_ROUTE_DRAFT_FILE=str(deploy/'runtime'/'semantic-route-draft.json'))
     # Credentials must come from this instance, never a different shell instance.
     env.pop('SEREIN_HTTP_TOKEN', None)

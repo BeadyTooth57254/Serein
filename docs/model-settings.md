@@ -76,7 +76,9 @@ Embedding 使用 `/embeddings`，Reranker 使用 `/rerank`；选择相应用途�
 - 在客户端添加请求头 `X-Serein-Window-ID`，值为当前会话的独立 ID；同一窗口保持不变，新建窗口换值。客户端支持会话 ID 变量时可使用它。旧客户端的 `X-Ombre-Session-Id` 也可兼容。
 - 不填时回退到 `main`，聊天、记忆及已开启的会话功能仍可运行，但这些请求共用轮次、状态与召回冷却，不能识别新窗口。全局填写一个固定请求头也不能区分窗口。开窗续接仍需显式发送 `/resume` 指令。
 
-远程 MCP 的服务器 URL 填 `https://你的域名/serein/mcp`，直接访问 IP 时填 `http://公网IP:网关端口/serein/mcp`，传输类型选择 **Streamable HTTP**。请求头名称为 `Authorization`，值为 `Bearer <Gateway Key>`；用实际 Key 替换占位文字及尖括号，保留 `Bearer` 后的空格。若客户端提供专门的 Bearer Token 输入框，只填 Key。MCP 与聊天 API 共用 Key，旧 `/mcp` 路由继续兼容。
+远程 MCP 的服务器 URL 填 `https://你的域名/serein/mcp`，传输类型选 **Streamable HTTP**。支持 OAuth 的客户端（包括官端自定义 MCP）把身份验证选为 **OAuth**；浏览器打开 Serein 授权页后，手动输入 Gateway Key 并确认。OAuth 需要 HTTPS 域名，同机 localhost 例外；不要把 Key 写进 URL、回调地址或客户端名称。
+
+不支持 OAuth、但支持自定义请求头的客户端仍可使用静态方式：`Authorization: Bearer <Gateway Key>`；专门的 Bearer Token 输入框只填 Key。直接使用 `http://公网IP:网关端口/serein/mcp` 时也只能用静态方式。旧 `/mcp` 路由继续兼容。更换 Gateway Key 会同时撤销旧静态 Key 与已发放的 OAuth 凭据，需要重新授权。
 
 网页 **使用说明 → 接入** 提供公网 IP 和域名的连接地址模板。菜单 6 会更换 Key，所有客户端均需同步；查看现有 Key 无需更换。仅连接 MCP 不会让直连其他模型平台的聊天自动经过 Serein 网关。
 

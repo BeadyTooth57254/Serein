@@ -143,8 +143,13 @@ def routes(settings, services, auth):
         else:
             stable = activity = recalled = ''
             messages = incoming
+            retained_anchor = ''
+            if resume_query is None and state['features']['resume']:
+                resume_snapshot = await asyncio.to_thread(chat_resume.retained, services, window_id, incoming, context)
+                if resume_snapshot:
+                    messages, retained_anchor = chat_resume.mark_retained_anchor(messages, resume_snapshot, context)
             if query:
-                messages, stable, activity, _ = context._rewrite_operit_context_for_forward(incoming)
+                messages, stable, activity, _ = context._rewrite_operit_context_for_forward(messages)
             resume_context = ''
             if resume_query is not None:
                 recall_state = 'resume'
@@ -158,18 +163,12 @@ def routes(settings, services, auth):
                     raise HTTPException(413, str(exc)) from None
                 resume_snapshot = {'source_count':len(incoming), 'source_digest':context._turn_injection_messages_digest(incoming),
                                    'context':resume_context, 'items':resume_items}
-            elif state['features']['resume']:
-                resume_snapshot = await asyncio.to_thread(chat_resume.retained, services, window_id, incoming, context)
-                if resume_snapshot:
-                    resume_context, resume_items = resume_snapshot['context'], resume_snapshot['items']
-                    if not query:
-                        # Reconstruct a tool continuation after process restart without
-                        # placing historical source material in a system message.
-                        messages = deepcopy(messages)
-                        anchor = context._current_turn_user_index(messages[:resume_snapshot['source_count']])
-                        if anchor is not None:
-                            messages[anchor] = context._prepend_dynamic_context_to_user_message(messages[anchor], resume_context)
-                            resume_context = ''
+            elif resume_snapshot:
+                resume_context, resume_items = resume_snapshot['context'], resume_snapshot['items']
+                # Preserve the frozen context at its original user anchor while
+                # removing the historical command from every later request.
+                messages = chat_resume.inject_retained(messages, resume_snapshot, context, retained_anchor)
+                resume_context = ''
             if use_memory and query and resume_query is None:
                 from ..configured_models import memory_ready
                 if not memory_ready(settings):

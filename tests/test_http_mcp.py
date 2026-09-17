@@ -115,7 +115,9 @@ def test_http_mcp_auth_tools_and_single_lifecycle(tmp_path, monkeypatch, writabl
             for auth in ('', 'Bearer wrong', 'Basic synthetic-key'):
                 denied = client.post(path, headers={**headers, 'Authorization':auth}, json=initialize)
                 assert denied.status_code == 401
-                assert denied.headers['www-authenticate'] == 'Bearer'
+                challenge = denied.headers['www-authenticate']
+                assert challenge.startswith('Bearer resource_metadata="http://testserver/.well-known/oauth-protected-resource/')
+                assert 'scope="serein:mcp"' in challenge
             result = client.post(path, headers=headers, json=initialize)
             assert result.status_code == 200, result.text
             assert not result.history

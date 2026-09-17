@@ -8,6 +8,14 @@ import { requireWebAuth } from './webAuth.mjs';
 const filename = process.env.SEREIN_WEB_AUTH_FILE;
 if (!filename) throw new Error('SEREIN_WEB_AUTH_FILE is required');
 const core = new URL(process.env.SEREIN_MEMORY_URL);
+let publicOrigin = null;
+if (process.env.SEREIN_PUBLIC_ORIGIN) {
+  publicOrigin = new URL(process.env.SEREIN_PUBLIC_ORIGIN);
+  const loopback = ['localhost','127.0.0.1','[::1]'].includes(publicOrigin.hostname);
+  if ((publicOrigin.protocol !== 'https:' && !(publicOrigin.protocol === 'http:' && loopback))
+      || publicOrigin.username || publicOrigin.password || publicOrigin.pathname !== '/'
+      || publicOrigin.search || publicOrigin.hash) throw new Error('SEREIN_PUBLIC_ORIGIN must be an HTTPS origin or loopback HTTP origin');
+}
 process.env.SEREIN_MEMORY_TOKEN = readFileSync(process.env.SEREIN_MEMORY_TOKEN_FILE, 'utf8').trim();
 if (!process.env.SEREIN_MEMORY_TOKEN) throw new Error('Memory token is empty');
 const web = await preview({ root: fileURLToPath(new URL('../', import.meta.url)),
@@ -26,14 +34,23 @@ const server = http.createServer((req, res) => {
     return;
   }
   const mcp = ['/serein/mcp', '/serein/mcp/', '/mcp', '/mcp/'].includes(path);
+  const oauth = path === '/authorize' || path === '/token' || path === '/register'
+    || path.startsWith('/.well-known/oauth-');
+  let requestHost;
+  try { requestHost = new URL(`http://${req.headers.host}`).hostname; } catch {}
+  const loopbackOAuth = ['localhost','127.0.0.1','[::1]'].includes(requestHost);
+  if (oauth && !publicOrigin && !loopbackOAuth) {
+    res.writeHead(400, {'Content-Type':'application/json'});
+    res.end('{"detail":"OAuth requires a configured HTTPS public origin"}');return;
+  }
   const chat = bearerPaths.has(path) || mcp;
   if (mcp && req.headers.origin) {
     let originOK = false;
     try { originOK = new URL(req.headers.origin).host === req.headers.host; } catch {}
     if (!originOK) { res.writeHead(403); res.end('Invalid origin'); return; }
   }
-  if (!chat && !requireWebAuth(req, res, filename)) return;
-  if (!chat && !['GET','HEAD','OPTIONS'].includes(req.method)) {
+  if (!chat && !oauth && !requireWebAuth(req, res, filename)) return;
+  if (!chat && !oauth && !['GET','HEAD','OPTIONS'].includes(req.method)) {
     let originOK = true;
     try { if (req.headers.origin) originOK = new URL(req.headers.origin).host === req.headers.host; }
     catch { originOK = false; }
@@ -41,14 +58,18 @@ const server = http.createServer((req, res) => {
       res.writeHead(403); res.end('Same-origin JSON required'); return;
     }
   }
-  if (chat && !req.headers.authorization?.startsWith('Bearer ')) {
+  if (chat && !mcp && !req.headers.authorization?.startsWith('Bearer ')) {
     res.writeHead(401); res.end('Bearer token required'); return;
   }
-  const target = chat ? core : new URL(`http://127.0.0.1:${process.env.SEREIN_PREVIEW_PORT || 4173}`);
-  const headers = { ...req.headers, host: chat ? target.host : req.headers.host };
-  if (mcp) headers['x-forwarded-host'] = req.headers.host;
+  const backend = chat || oauth;
+  const target = backend ? core : new URL(`http://127.0.0.1:${process.env.SEREIN_PREVIEW_PORT || 4173}`);
+  const headers = { ...req.headers, host: backend ? target.host : req.headers.host };
+  if (mcp || oauth) {
+    headers['x-forwarded-host'] = publicOrigin?.host || req.headers.host;
+    headers['x-forwarded-proto'] = publicOrigin?.protocol.slice(0,-1) || 'http';
+  }
   for (const key of hopHeaders) delete headers[key];
-  if (!chat) delete headers.authorization;
+  if (!backend) delete headers.authorization;
   const proxy = (target.protocol === 'https:' ? https : http).request(target, {
     method: req.method, path: req.url, headers,
   }, upstream => {

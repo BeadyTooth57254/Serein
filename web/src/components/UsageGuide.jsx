@@ -153,12 +153,13 @@ export function UsageGuide({ onOpenSettingsTab, initialPage }) {
       <p>接口类型选 OpenAI 兼容，<strong>Base URL</strong> 填 <code>http://公网IP:网关端口/v1</code>，使用域名时填 <code>https://你的域名/v1</code>；<strong>API Key</strong> 填完整的 Gateway Key，密钥输入框不用加 <code>Bearer </code> 前缀。聊天客户端可拉取已配置的全部上游模型。</p>
       <p>手动发请求时，模型列表为 <code>GET http://公网IP:网关端口/v1/models</code>，聊天为 <code>POST http://公网IP:网关端口/v1/chat/completions</code>；请求头为 <code>Authorization: Bearer &lt;Gateway Key&gt;</code>，把占位文字及尖括号替换成实际 Key。客户端 Base URL 通常只填到 <code>/v1</code>。</p>
       <h4>MCP · Streamable HTTP</h4>
-      <p><strong>服务器 URL</strong> 填 <code>http://公网IP:网关端口/serein/mcp</code>，使用域名时填 <code>https://你的域名/serein/mcp</code>；<strong>传输类型</strong> 选 <code>Streamable HTTP</code>。添加请求头：名称 <code>Authorization</code>，值 <code>Bearer &lt;Gateway Key&gt;</code>，用实际 Key 替换占位文字及尖括号，保留 <code>Bearer</code> 后的空格。若客户端提供专门的 Bearer Token 输入框，只填完整 Key。</p>
+      <p><strong>服务器 URL</strong> 填 <code>https://你的域名/serein/mcp</code>，<strong>传输类型</strong> 选 <code>Streamable HTTP</code>。支持 OAuth 的客户端把身份验证选为 <strong>OAuth</strong>；浏览器打开 Serein 授权页后，手动输入 Gateway Key 并确认。OAuth 要求 HTTPS 域名，同机 <code>localhost</code> 例外；不要把 Key 写进 URL。</p>
+      <p>不支持 OAuth、但可添加请求头的客户端仍可使用静态方式：名称 <code>Authorization</code>，值 <code>Bearer &lt;Gateway Key&gt;</code>；专门的 Bearer Token 输入框只填完整 Key。<code>http://公网IP:网关端口/serein/mcp</code> 也只能使用静态方式。</p>
       <p>旧地址 <code>http://公网IP:网关端口/mcp</code> 仍兼容。到<SettingsLink tab="features" onOpen={onOpenSettingsTab}>功能设置</SettingsLink>开启可选工具并保存后，刷新客户端工具列表。</p>
       <p>仅当客户端和 Serein 服务在同一台机器上时，才把“公网IP”换成 <code>127.0.0.1</code>。同一局域网内的其他设备可填安装主机的局域网 IP；手机连接电脑时不能填 <code>127.0.0.1</code>，那会指向手机自身。</p>
       <h4>Gateway Key 在哪里</h4>
       <p>MCP 和聊天 API 共用安装时生成的 Gateway Key。安装完成的终端输出和安装目录下的 <code>deploy/connection-guide.txt</code> 都有；也可读取 <code>{location?.root ? `${location.root.replace(/[\\/]$/, "")}${/^[A-Za-z]:/.test(location.root) ? "\\" : "/"}deploy${/^[A-Za-z]:/.test(location.root) ? "\\" : "/"}secrets${/^[A-Za-z]:/.test(location.root) ? "\\" : "/"}api-token` : "deploy/secrets/api-token"}</code> 的完整内容。本页不展示实际密钥。</p>
-      <p>网页登录用安装时设置的用户名、密码；模型厂商的 API Key 填在<SettingsLink tab="models" onOpen={onOpenSettingsTab}>模型页</SettingsLink>。客户端连接 Serein 时填 Gateway Key。主菜单 <code>6</code> 会更换 Key，旧 Key 随即失效，所有聊天和 MCP 客户端都要更新；查看现有 Key 无需更换。密钥和连接说明请勿公开。</p>
+      <p>网页登录用安装时设置的用户名、密码；模型厂商的 API Key 填在<SettingsLink tab="models" onOpen={onOpenSettingsTab}>模型页</SettingsLink>。主菜单 <code>6</code> 会更换 Gateway Key，旧静态 Key 和已经发放的 OAuth 凭据随即失效；OAuth 客户端需要重新授权。密钥和连接说明请勿公开。</p>
       <h4>聊天窗口与开窗续接</h4>
       <p>在客户端添加请求头：名称填 <code>X-Serein-Window-ID</code>，值填当前会话的独立标识，例如 <code>chat-001</code>。同一会话保持不变，新建会话换一个值；若客户端支持会话 ID 变量，可使用它。</p>
       <p>不填请求头也能使用，会统一进入默认会话 <code>main</code>，共用提醒轮次和召回冷却，无法据此识别新窗口。固定写一个值也不会自动区分窗口。启用开窗续接后，可在功能设置里选择带入最近 1–50 条原话；“最近原话”和“尚未整理的原话”只能开启一个，打开一个会自动关闭另一个。在聊天中发送 <code>/resume</code>，也可以在指令后写上想继续聊的话，Serein 会读取完整的接续资料。</p>

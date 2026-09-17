@@ -1,4 +1,5 @@
 import { readLocalPreference, storeLocalPreference } from "./awakeStore.js";
+import { settingsResponseError } from "./settingsError.js";
 
 export function identityName(role) {
   return role === "user"
@@ -13,9 +14,7 @@ export async function instanceSettings(changes) {
     ...(changes ? { body: JSON.stringify(changes) } : {}),
   });
   if (!response.ok) {
-    if (response.status === 409) {const error=await response.json().catch(()=>({}));throw new Error(typeof error.detail==='string'?error.detail:"设置已更新，请刷新后重试。");}
-    if ([400,422].includes(response.status)) throw new Error("配置未保存，请核对模型名称、接口地址与功能选择。");
-    throw new Error("设置服务暂不可用，请检查后端连接后重试。");
+    throw await settingsResponseError(response);
   }
   const result = await response.json();
   storeLocalPreference("serein.awake.name.user", result.identity.user_name);

@@ -1,11 +1,14 @@
 from copy import deepcopy
 import json
+from types import SimpleNamespace
 
 import httpx
 import pytest
 from fastapi.testclient import TestClient
 
 from serein.api.http import create_app
+from serein import chat_resume
+from serein.chat_context import ClientContext
 from serein.compat.window_shadows import WindowShadows
 from serein.core import Store
 from serein.deployment import save_settings
@@ -52,10 +55,21 @@ def test_resume_and_followup_full_pages_persist_and_match_history(chat):
     # A new process must carry the frozen resume context into subsequent turns.
     WindowShadows(settings.database).write('first','Synthetic continuity',content='Changed after resume',expected_revision=1)
     reopened = TestClient(create_app(settings, token='synthetic', live=True), headers={'Authorization':'Bearer synthetic'})
-    followup = messages + [{'role':'assistant','content':'Synthetic reply'}, {'role':'user','content':'接着呢？'}]
+    followup = messages + [{'role':'assistant','content':'Synthetic reply'}, {'role':'user','content':'接着呢？顺便解释 /resume 的作用'}]
     assert post(reopened, followup).status_code==200
-    assert 'Full shadow marker' in payloads[-1]['messages'][-1]['content']
-    assert 'Changed after resume' not in payloads[-1]['messages'][-1]['content']
+    forwarded = payloads[-1]['messages']
+    serialized = json.dumps(forwarded, ensure_ascii=False)
+    assert '/resume' not in forwarded[0]['content']
+    assert '/resume' in forwarded[-1]['content']
+    assert serialized.count('Serein resume:') == 1
+    assert 'Full shadow marker' in forwarded[0]['content']
+    assert 'Changed after resume' not in serialized
+    assert forwarded[-1]['content'] == '接着呢？顺便解释 /resume 的作用'
+    # Removing or changing the original prefix must not retain its frozen context.
+    assert post(reopened, followup[1:]).headers['x-serein-resume']=='none'
+    changed = deepcopy(followup)
+    changed[0]['content'] = '/resume 改聊今天的事'
+    assert post(reopened, changed).headers['x-serein-resume']=='none'
     # The default main window must not attach that snapshot to unrelated history.
     unrelated = [{'role':'user','content':'Different chat'}]
     assert post(reopened, unrelated).headers['x-serein-resume']=='none'
@@ -119,8 +133,58 @@ def test_resume_does_not_require_embedding_and_tool_round_keeps_context(chat, mo
     assert payloads[-1]['messages'] == first+tail
     reopened = TestClient(create_app(settings,token='synthetic',live=True),headers={'Authorization':'Bearer synthetic'})
     assert post(reopened,messages+tail).status_code==200
+    serialized = json.dumps(payloads[-1]['messages'], ensure_ascii=False)
+    assert '/resume' not in payloads[-1]['messages'][0]['content']
+    assert serialized.count('Serein resume:') == 1
     assert 'Full shadow marker' in payloads[-1]['messages'][0]['content']
     assert payloads[-1]['messages'][-2:] == tail
+
+
+def test_retained_resume_anchor_survives_dropped_operit_prefix(chat):
+    settings, client, payloads = chat
+    prefix = {'role':'user','content':'<attachment filename="time:synthetic">【当前时间】\nPure Operit prefix marker</attachment>'}
+    resume = {'role':'user','content':'/resume Original anchor text'}
+    assert post(client,[prefix,resume]).status_code==200
+    reopened = TestClient(create_app(settings,token='synthetic',live=True),headers={'Authorization':'Bearer synthetic'})
+    followup = [prefix,resume,{'role':'assistant','content':'Synthetic reply'},
+                {'role':'user','content':'Latest followup mentions /resume normally'}]
+    response = post(reopened,followup)
+    assert response.status_code==200 and response.headers['x-serein-resume']=='loaded'
+    forwarded = payloads[-1]['messages']
+    serialized = json.dumps(forwarded,ensure_ascii=False)
+    assert len(forwarded)==3
+    assert forwarded[0]['role']=='user' and 'Original anchor text' in forwarded[0]['content']
+    assert '/resume' not in forwarded[0]['content']
+    assert forwarded[0]['content'].count('Serein resume:')==1
+    assert serialized.count('Serein resume:')==1
+    assert forwarded[-1]['content'].endswith('Latest followup mentions /resume normally')
+    assert '/resume' in forwarded[-1]['content']
+    assert '__serein_internal_resume_anchor__' not in serialized
+
+
+def test_retained_prefers_longest_matching_prefix(chat):
+    settings, _, _ = chat
+    context = ClientContext()
+    messages = [{'role':'user','content':'/resume first'},
+                {'role':'assistant','content':'First reply'},
+                {'role':'user','content':'/resume second'},
+                {'role':'assistant','content':'Second reply'},
+                {'role':'user','content':'Latest'}]
+    short = {'source_count':1,
+             'source_digest':context._turn_injection_messages_digest(messages[:1]),
+             'context':'short frozen context','items':1}
+    long = {'source_count':3,
+            'source_digest':context._turn_injection_messages_digest(messages[:3]),
+            'context':'long frozen context','items':2}
+    with Store(settings.database) as store, store.transaction(immediate=True):
+        store.conn.execute('CREATE TABLE IF NOT EXISTS chat_resume_contexts '
+                           '(key TEXT PRIMARY KEY, window_id TEXT NOT NULL, payload_json TEXT NOT NULL, updated_at TEXT NOT NULL)')
+        store.conn.execute('INSERT INTO chat_resume_contexts VALUES (?,?,?,?)',
+                           ('long','specific-window',json.dumps(long),'2026-01-01T00:00:00Z'))
+        store.conn.execute('INSERT INTO chat_resume_contexts VALUES (?,?,?,?)',
+                           ('short','specific-window',json.dumps(short),'9999-01-01T00:00:00Z'))
+    found = chat_resume.retained(SimpleNamespace(_settings=settings),'specific-window',messages,context)
+    assert found == long
 
 
 @pytest.mark.parametrize('stream', [False, True])

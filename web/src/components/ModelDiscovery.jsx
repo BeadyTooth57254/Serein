@@ -21,7 +21,7 @@ export function ModelDiscovery({upstream,onAdd}) {
   const full=upstream.models.length+chosen.length>500;
   return <section className="model-discovery" aria-label="拉取上游模型">
     <div className="settings-actions"><button type="button" disabled={busy||!upstream.base_url.trim()} onClick={fetchModels}>{busy?'正在拉取…':'拉取模型'}</button></div>
-    <p className="model-connection-help" role="status">{message||'使用上面填写的地址和密钥拉取；密钥留空时沿用该上游已保存的密钥。'}</p>
+    <p className="model-connection-help" role="status">{message||'使用上面填写的地址和密钥拉取；密钥留空时沿用该上游已保存的密钥。拉取不会保存密钥，更换后还需点击“保存上游与模型”。'}</p>
     {models?.length>0&&<>
       <label className="settings-field"><span>搜索模型</span><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="输入模型名筛选"/></label>
       <div className="model-discovery-list">{models.filter(name=>name.toLowerCase().includes(query.toLowerCase())).map(name=><label key={name}>

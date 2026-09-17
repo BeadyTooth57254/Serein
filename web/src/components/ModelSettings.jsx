@@ -4,6 +4,7 @@ import {UpstreamSettings} from "./UpstreamSettings.jsx";
 import {upstreamModels,taskModelOptions} from "../modelOptions.js";
 import {AgentGuide} from './AgentGuide.jsx';
 import {RecallThresholdSettings} from './RecallThresholdSettings.jsx';
+import {upstreamsForSave} from '../upstreamSecrets.js';
 
 const tasks = {writer:"Narrative Writer",embedding:"Embedding",reranker:"Reranker",
   relations:"Scene 关系",dreams:"梦境",narrative_scout:"叙事卷找材料",persona:"心绪/防撤退",
@@ -34,6 +35,7 @@ export function ModelSettings({page,summaryRequest=0,onOpenPipeline,onOpenCatalo
   const validCandidateThresholds=[bodyCandidateThreshold,cueCandidateThreshold].every(value=>
     value!=='' && Number.isFinite(Number(value)) && Number(value)>=0 && Number(value)<=1);
   const summaryConfig=useRef(null);
+  const upstreamForm=useRef(null);
   const ready=!!config;
   useEffect(()=>{
     if(!summaryRequest||!summaryConfig.current)return;
@@ -66,11 +68,7 @@ export function ModelSettings({page,summaryRequest=0,onOpenPipeline,onOpenCatalo
         if(!model.dimension)delete model.dimension;
         return model;
       });
-      const upstreams=(config.upstreams || []).map(({api_key_configured,clear_key,...upstream})=>{
-        if(clear_key){upstream.api_key="";upstream.api_key_env="";}
-        else if(!upstream.api_key)delete upstream.api_key;
-        return upstream;
-      });
+      const upstreams=upstreamsForSave(config.upstreams || [],upstreamForm.current);
       if(!validThreshold)throw new Error('召回阈值需填写 0 到 1 之间的数字。');
       if(!validCandidateThresholds)throw new Error('候选扩展门槛需填写 0 到 1 之间的数字。');
       if(passageMinChars===''||!Number.isInteger(Number(passageMinChars))||Number(passageMinChars)<1||Number(passageMinChars)>100000)
@@ -96,7 +94,7 @@ export function ModelSettings({page,summaryRequest=0,onOpenPipeline,onOpenCatalo
   return <>
     <div role="tabpanel" id="settings-content-models" aria-labelledby="settings-tab-models" aria-hidden={page!=="models"} inert={page!=="models"}>
       <section className="settings-group" aria-label="上游与模型">
-        {config&&<form onSubmit={save}>
+        {config&&<form ref={upstreamForm} onSubmit={save}>
       <div className="settings-group__heading"><h3>上游与模型</h3></div>
       <p className="model-connection-help">按上游管理模型，密钥只保存在服务端。</p>
       <UpstreamSettings modelIds={availableModels.map(m=>m.id)} assignments={config.assignments} upstreams={config.upstreams || []} onChange={changeUpstreams} onImported={setConfig} busy={busy} setBusy={setBusy} setStatus={setStatus} />
