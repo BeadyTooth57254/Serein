@@ -295,7 +295,7 @@ bash scripts/one_click.sh
 | 用途 | 工具 | 开启条件与说明 |
 | --- | --- | --- |
 | 查找记忆 | `recall_memory` | 基础读取；主动检索 Scene / Event，查到不等于已自动注入 |
-| 读取全文与证据 | `read_memory` | 基础读取；按 ID 读记忆、叙事卷、日记或上传材料等，默认附当前有效绑定原文 |
+| 读取全文与证据 | `read_memory` | 基础读取；按 ID 读记忆、叙事卷、日记或上传材料等，默认列出绑定原文编号，`with_evidence=true` 才展开原文 |
 | 查找叙事卷 | `find_arc` | 基础读取；按标题或关键词找卷，返回标题与 ID |
 | 读取卷内材料 | `read_arc_materials` | 基础读取；含上传材料，支持目录编号选择与分页 |
 | 保存与管理记忆 | `write_scene`、`edit_scene`、`set_scene_status`、`set_memory_state`、`annotate` | 可写实例；分别新建 Scene、局部修改 Scene、管理状态与自动浮现资格；收藏修改另需开启收藏工具。自动 Event 正文由摘要流水线维护 |

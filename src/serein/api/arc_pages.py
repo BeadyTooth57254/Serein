@@ -64,3 +64,45 @@ def page(result, filters, cursor=''):
     if low == offset:
         raise ValueError('Arc page cannot fit the transport budget')
     return dump(fragment(low))
+
+
+def text_page(text, filters, cursor=''):
+    """Page one human-readable text block without wrapping it in JSON."""
+    digest = hashlib.sha256(dump([filters, text]).encode()).hexdigest()
+    offset = 0
+    if cursor:
+        try:
+            if not cursor.startswith('arct1.') or len(cursor) > 200:
+                raise ValueError()
+            offset, prior = json.loads(base64.urlsafe_b64decode(cursor[6:] + '=' * (-len(cursor[6:]) % 4)))
+            if type(offset) is not int or not 0 < offset < len(text) or not isinstance(prior, str):
+                raise ValueError()
+        except (ValueError, TypeError, UnicodeError):
+            raise ValueError('Invalid Arc text cursor; restart without cursor') from None
+        if prior != digest:
+            raise Conflict('Arc materials or filters changed; restart without cursor and refresh the menu')
+
+    if not cursor and size(dump({'content': [{'type': 'text', 'text': text}], 'isError': False})) <= PAGE_CHARS:
+        return text
+
+    def fragment(end):
+        complete = end == len(text)
+        following = None if complete else 'arct1.' + base64.urlsafe_b64encode(
+            dump([end, digest]).encode()).decode().rstrip('=')
+        return ('[text_page]\n'
+                f'content_offset: {offset}\n'
+                f'content_complete: {str(complete).lower()}\n'
+                f'next_cursor: {following or ""}\n'
+                'text:\n' + text[offset:end] + '\n[/text_page]')
+
+    low, high = offset, min(len(text), offset + PAGE_CHARS)
+    while low < high:
+        middle = (low + high + 1) // 2
+        candidate = fragment(middle)
+        if size(dump({'content': [{'type': 'text', 'text': candidate}], 'isError': False})) <= PAGE_CHARS:
+            low = middle
+        else:
+            high = middle - 1
+    if low == offset:
+        raise ValueError('Arc text page cannot fit the transport budget')
+    return fragment(low)

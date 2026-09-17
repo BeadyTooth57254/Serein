@@ -30,6 +30,17 @@ class Services:
         with Reader(self._settings.database) as reader:
             return reader.read(identifier, **options)
 
+    def read_with_menus(self, identifier, **options):
+        with Reader(self._settings.database) as reader:
+            result = reader.read(identifier, **options)
+            result["narrative_menus"] = []
+            if result.get("readable") and result.get("kind") in {"event", "scene"}:
+                from .recall.rendering import _arcs
+                by_owner, menus = _arcs(reader, [{"id": result["id"]}])
+                result["narrative_menus"] = [menus[item["arc_key"]]
+                                               for item in by_owner.get(result["id"], [])]
+            return result
+
     def materials(self, identifier, **options):
         with Reader(self._settings.database) as reader:
             return reader.materials(identifier, **options)

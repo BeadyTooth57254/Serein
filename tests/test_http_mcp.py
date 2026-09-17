@@ -140,7 +140,8 @@ def test_http_mcp_auth_tools_and_single_lifecycle(tmp_path, monkeypatch, writabl
             assert name not in names
             assert rpc('tools/call', {'name':name, 'arguments':{}})['isError']
         read = rpc('tools/call', {'name':'read_memory', 'arguments':{'identifier':'scene_test'}})
-        assert not read['isError'] and read['structuredContent']['document']['body_md'] == 'Original body'
+        assert not read['isError'] and 'structuredContent' not in read
+        assert 'body:\nOriginal body' in read['content'][0]['text']
         if writable:
             save_settings(settings.database, {'features':{'resume':True}})
             assert 'resume' not in {t['name'] for t in rpc('tools/list')['tools']}
@@ -156,19 +157,21 @@ def test_http_mcp_auth_tools_and_single_lifecycle(tmp_path, monkeypatch, writabl
             retry = rpc('tools/call', {'name':'write_scene', 'arguments':arguments})['structuredContent']
             assert saved['id'] == retry['id']
             reread = rpc('tools/call', {'name':'read_memory', 'arguments':{'identifier':saved['id']}})
-            assert reread['structuredContent']['document']['body_md'] == 'Saved over MCP'
-            assert reread['structuredContent']['document']['metadata']['scene_cues'] == ['synthetic']
-            assert reread['structuredContent']['document']['metadata']['date'] == '2026-09-14'
-            assert reread['structuredContent']['evidence'] == []
+            assert 'structuredContent' not in reread
+            assert 'body:\nSaved over MCP' in reread['content'][0]['text']
+            assert 'date: 2026-09-14' in reread['content'][0]['text']
+            assert 'bound_sources: 0' in reread['content'][0]['text']
             edit_args = {'operation_id':'http-mcp-edit', 'scene_id':saved['id'], 'expected_revision':1,
                          'content':'Edited over MCP'}
             edited = rpc('tools/call', {'name':'edit_scene', 'arguments':edit_args})['structuredContent']
             assert edited['revision'] == 2
             assert rpc('tools/call', {'name':'edit_scene', 'arguments':edit_args})['structuredContent']['revision'] == 2
             assert rpc('tools/call', {'name':'edit_scene', 'arguments':{**edit_args,'operation_id':'http-stale'}})['isError']
-            current = rpc('tools/call', {'name':'read_memory', 'arguments':{'identifier':saved['id']}})['structuredContent']['document']
-            assert current['body_md'] == 'Edited over MCP' and current['title'] == 'Synthetic'
-            assert current['metadata']['scene_cues'] == ['synthetic'] and current['metadata']['date'] == '2026-09-14'
+            current_text = rpc('tools/call', {'name':'read_memory', 'arguments':{'identifier':saved['id']}})['content'][0]['text']
+            assert 'title: Synthetic' in current_text and 'body:\nEdited over MCP' in current_text
+            with Store(settings.database, read_only=True) as store:
+                current = store.read(saved['id'])
+                assert current['metadata']['scene_cues'] == ['synthetic'] and current['metadata']['date'] == '2026-09-14'
             for kind in ('event', 'narrative'):
                 rejected = rpc('tools/call', {'name':'write_scene', 'arguments':{
                     **arguments, 'operation_id':'reject-'+kind, 'kind':kind}})
@@ -200,7 +203,8 @@ def test_official_streamable_http_client(tmp_path, entry_path):
                         assert 'read_memory' in {t.name for t in (await session.list_tools()).tools}
                         result = await session.call_tool('read_memory', {'identifier':'scene_sdk'})
                         assert not result.isError
-                        assert result.structuredContent['document']['body_md'] == 'Read by the official client'
+                        assert result.structuredContent is None
+                        assert 'body:\nRead by the official client' in result.content[0].text
     asyncio.run(exercise())
 
 

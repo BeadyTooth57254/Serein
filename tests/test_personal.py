@@ -105,15 +105,17 @@ def test_optional_favorite_tool_filters_paginates_and_never_records_recall(live)
     archived=client.post('/v1/extensions/read_favorites',json={'include_archived':True,'limit':100}).json()
     assert len(archived['items'])==11 and any(item['id']=='event_00' for item in archived['items'])
     assert not {'event_10','event_11','narrative_saved'} & set(ids)
-    result=json.loads(asyncio.run(server.call_tool('read_favorites',{'kind':'scene'}))[0].text)
-    assert result['items'][0]['document']['body_md']=='Scene body'
+    favorite_result=asyncio.run(server.call_tool('read_favorites',{'kind':'scene'}))
+    assert len(favorite_result)==1 and '[favorites]' in favorite_result[0].text
+    assert 'body:\nScene body' in favorite_result[0].text
+    assert next(t for t in asyncio.run(server.list_tools()) if t.name=='read_favorites').outputSchema is None
     events=client.post('/v1/extensions/read_favorites',json={'kind':'event','include_archived':False,'with_evidence':True,'limit':100}).json()
     assert len(events['items'])==9 and all(item['kind']=='event' for item in events['items'])
     assert next(item for item in events['items'] if item['id']=='event_01')['evidence']
     for args in [{'kind':'narrative'},{'limit':0},{'limit':True},{'offset':-1},{'with_evidence':'yes'}]:
         assert client.post('/v1/extensions/read_favorites',json=args).status_code==400
     read_only=create_server(Application(replace(settings,writable=False)))
-    assert json.loads(asyncio.run(read_only.call_tool('read_favorites',{'kind':'scene'}))[0].text)['items'][0]['id']=='scene_saved'
+    assert 'id: scene:scene_saved' in asyncio.run(read_only.call_tool('read_favorites',{'kind':'scene'}))[0].text
     with Store(settings.database,read_only=True) as store:assert '\n'.join(store.conn.iterdump())==before
     client.patch('/v1/settings',json={'features':{'favorites':False}}).raise_for_status()
     assert asyncio.run(restricted.list_tools())==[]

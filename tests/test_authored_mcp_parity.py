@@ -56,15 +56,18 @@ def test_new_schema_has_self_use_required_fields_and_defaults(runtime):
     assert favorites['limit']['default'] == 5
     assert favorites['include_archived']['default'] is False
     assert tools['write_diary'].inputSchema['properties']['author']['default'] == 'ai'
+    for name in ('read_memory', 'recall_memory', 'find_arc', 'read_arc_materials', 'read_diary', 'read_favorites'):
+        assert tools[name].outputSchema is None
 
 
 def test_scene_minimal_write_edit_status_annotations_and_legacy_retry(runtime):
     server = create_server(Application(runtime))
     reply = call(server, 'write_scene', content='Synthetic memory', cues=['synthetic'])
     key = re.search(r'\[scene_id:([^\]]+)\]', reply)[1]
-    original = call(server, 'read_memory', identifier=key)['document']
-    assert original['title'] == original['body_md'] == 'Synthetic memory'
-    assert original['metadata']['date'] == ''
+    original_text = call(server, 'read_memory', identifier=key)
+    assert f'id: scene:{key}' in original_text and 'body:\nSynthetic memory' in original_text
+    with Store(runtime.database, read_only=True) as store:
+        original = store.read(key)
     edit = call(server, 'edit_scene', scene_id=key, expected_updated_at=original['updated_at'], content='Edited memory')
     assert edit['status'] == 'updated'
     stale = call(server, 'edit_scene', scene_id=key, expected_updated_at=original['updated_at'], content='Stale overwrite')
@@ -102,14 +105,16 @@ def test_scene_domain_evidence_and_favorite_are_atomic(runtime, favorite):
     reply = call(server, 'write_scene', **args)
     key = re.search(r'\[scene_id:([^\]]+)\]', reply)[1]
     saved = call(server, 'read_memory', identifier=key, with_evidence=True)
-    assert saved['document']['metadata']['canonical_domain'] == 'life'
-    assert saved['evidence'][0]['content'] == 'Exact synthetic quotation'
+    assert 'body:\nAuthored scene' in saved and 'text:\nExact synthetic quotation' in saved
     from serein.compat.scenes import Scenes
     assert Scenes(runtime.database).evidence(key)['evidence_refs'][0]['content'] == 'Exact synthetic quotation'
-    call(server, 'edit_scene', scene_id=key, expected_updated_at=saved['document']['updated_at'], content='Edited')
-    assert call(server, 'read_memory', identifier=key, with_evidence=True)['evidence'] == saved['evidence']
+    with Store(runtime.database, read_only=True) as store:
+        current = store.read(key)
+        assert current['metadata']['canonical_domain'] == 'life'
+    call(server, 'edit_scene', scene_id=key, expected_updated_at=current['updated_at'], content='Edited')
+    assert 'text:\nExact synthetic quotation' in call(server, 'read_memory', identifier=key, with_evidence=True)
     favorites = call(server, 'read_favorites')
-    assert len(favorites['items']) == 1
+    assert '[favorites]' in favorites and f'id: scene:{key}' in favorites
 
 
 def test_http_diary_self_use_flow_and_locked_rejections(runtime):
@@ -119,15 +124,21 @@ def test_http_diary_self_use_flow_and_locked_rejections(runtime):
             result = client.post('/mcp', json={'jsonrpc': '2.0', 'id': 1, 'method': 'tools/call',
                                               'params': {'name': name, 'arguments': args}}).json()['result']
             assert bool(result.get('isError')) is error, result
-            return result if error else result.get('structuredContent') or json.loads(result['content'][0]['text'])
+            if error or result.get('structuredContent'):
+                return result if error else result['structuredContent']
+            text = result['content'][0]['text']
+            try:
+                return json.loads(text)
+            except json.JSONDecodeError:
+                return text
         entry = rpc('write_diary', {'content': 'Synthetic diary'})
         key = entry['id']
         assert entry['author'] == 'ai'
-        assert rpc('read_diary', {'diary_id': key})['diaries'][0]['content'] == 'Synthetic diary'
-        assert rpc('read_diary', {'date': entry['date']})['count'] == 1
+        assert 'body:\nSynthetic diary' in rpc('read_diary', {'diary_id': key})
+        assert 'count: 1' in rpc('read_diary', {'date': entry['date']})
         assert rpc('revise_diary', {'diary_id': key, 'content': 'Revised'})['revision'] == 2
         rpc('comment_diary', {'diary_id': key, 'content': 'Comment'})
-        assert rpc('read_diary', {'diary_id': key})['diaries'][0]['comments'][0]['author'] == 'ai'
+        assert '[comment 1] author=ai' in rpc('read_diary', {'diary_id': key})
         rpc('write_diary', {'content': 'Must fail', 'kind': 'diary'}, error=True)
         locked = rpc('write_diary', {'content': 'Sealed private synthetic text',
                                      'unlock_at': (datetime.now(timezone.utc)+timedelta(days=1)).isoformat()})
@@ -136,7 +147,7 @@ def test_http_diary_self_use_flow_and_locked_rejections(runtime):
         for name, args in [('revise_diary', {'content': 'Forbidden'}), ('comment_diary', {'content': 'Forbidden'}), ('delete_diary', {})]:
             rpc(name, {'diary_id': locked_key, **args}, error=True)
         rpc('delete_diary', {'diary_id': key})
-        assert rpc('read_diary', {'diary_id': key})['count'] == 0
+        assert 'count: 0' in rpc('read_diary', {'diary_id': key})
         rpc('comment_diary', {'diary_id': key, 'content': 'After deletion'}, error=True)
     with Store(runtime.database, read_only=True) as store:
         assert store.conn.execute('SELECT count(*) FROM diary_revisions WHERE diary_id=?', (key,)).fetchone()[0] == 2
@@ -158,7 +169,7 @@ def test_diary_projection_failure_rolls_back_new_contract(runtime, monkeypatch):
 
 def test_readonly_and_allowlist_cannot_reach_hidden_old_writers(runtime):
     readonly = create_server(Application(Settings(runtime.database, writable=False)))
-    assert call(readonly, 'read_diary')['count'] == 0
+    assert 'count: 0' in call(readonly, 'read_diary')
     for name in ('write_scene', 'set_scene_status', 'write_diary', 'revise_diary', 'annotate'):
         with pytest.raises(Exception, match='Unknown tool'):
             call(readonly, name, operation_id='old')
@@ -172,7 +183,7 @@ def test_core_only_notebook_uses_same_calls_without_initializing_legacy_tables(t
     with Store(settings.database):
         pass
     server = create_server(Application(settings))
-    assert call(server, 'read_diary')['count'] == 0
+    assert 'count: 0' in call(server, 'read_diary')
     entry = call(server, 'write_diary', content='Core synthetic diary')
     key = entry['id']
     assert entry['author'] == 'ai' and entry['title'] == ''
@@ -180,12 +191,12 @@ def test_core_only_notebook_uses_same_calls_without_initializing_legacy_tables(t
     assert revised['revision'] == 2
     call(server, 'comment_diary', diary_id=key, content='Core comment')
     read = call(server, 'read_diary', diary_id=key)
-    assert read['content'] == 'Core revised' and read['comments'][0]['content'] == 'Core comment'
+    assert 'body:\nCore revised' in read and 'Core comment' in read
     locked = call(server, 'write_diary', content='Core locked', unlock_at=(datetime.now(timezone.utc)+timedelta(days=1)).isoformat())
     assert locked['content'] == '' and locked['body_available'] is False
     with pytest.raises(Exception, match='readable'):
         call(server, 'delete_diary', diary_id=locked['id'])
     call(server, 'delete_diary', diary_id=key)
-    assert call(server, 'read_diary', diary_id=key)['count'] == 0
+    assert 'count: 0' in call(server, 'read_diary', diary_id=key)
     with Store(settings.database, read_only=True) as store:
         assert store.conn.execute("SELECT 1 FROM sqlite_master WHERE name='diaries'").fetchone() is None

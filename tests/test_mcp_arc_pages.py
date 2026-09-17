@@ -4,6 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from serein.api.arc_pages import page, PAGE_CHARS, dump, size
+from serein.api.read_text import arc_materials_text
 from serein.api.http import create_app
 from serein.application import Application
 from serein.config import Settings
@@ -18,7 +19,7 @@ def test_actual_mcp_pages_preserve_complete_materials_and_fit_client(arc_upload_
     services = Application(settings).services
     args = {'arc_key': 'work:synthetic', 'picks': [0, 9]} if by_key else {
         'identifier': 'narrative_uploads', 'offset': 0, 'limit': 100, 'with_evidence': True}
-    expected = services.arc_picks(args['arc_key'], args['picks']) if by_key else services.materials(
+    expected = services.arc_picks(args['arc_key'], args['picks'], with_evidence=True) if by_key else services.materials(
         args['identifier'], offset=0, limit=100, with_evidence=True)
     encoded, cursor, seen = '', '', set()
     with TestClient(create_app(settings, token='synthetic'), headers={
@@ -30,23 +31,25 @@ def test_actual_mcp_pages_preserve_complete_materials_and_fit_client(arc_upload_
             assert not result['isError'], result
             assert result.get('structuredContent') is None
             assert size(dump(result)) <= PAGE_CHARS
-            payload = json.loads(result['content'][0]['text'])
-            android = dump({k: v for k, v in result.items() if k != 'content'}) + '\n\n' + dump(payload)
+            payload = result['content'][0]['text']
+            android = dump({k: v for k, v in result.items() if k != 'content'}) + '\n\n' + payload
             assert size(android) < 5000
-            assert list(payload)[:2] == ['has_more', 'next_cursor']
-            assert payload['page_format'] == 'json_fragment'
-            assert payload['content_offset'] == len(encoded)
-            assert payload['content']
-            encoded += payload['content']
-            if not payload['has_more']:
-                assert payload['next_cursor'] is None and payload['content_complete']
+            assert payload.startswith('[text_page]\n') and payload.endswith('\n[/text_page]')
+            header, content = payload[len('[text_page]\n'):].split('\ntext:\n', 1)
+            content = content[:-len('\n[/text_page]')]
+            fields = dict(line.split(': ', 1) for line in header.splitlines())
+            assert int(fields['content_offset']) == len(encoded)
+            assert content
+            encoded += content
+            if fields['content_complete'] == 'true':
+                assert not fields['next_cursor']
                 break
-            cursor = payload['next_cursor']
+            cursor = fields['next_cursor']
             assert cursor not in seen
             seen.add(cursor)
         else:
             pytest.fail('Arc pagination did not finish')
-    assert json.loads(encoded) == expected
+    assert encoded == arc_materials_text(expected, with_evidence=bool(args.get('with_evidence')))
     # Pagination neither edits canonical content nor truncates direct service reads.
     assert services.arc_picks('work:synthetic', [9])['items'][0]['object']['document']['body_md'].endswith('\\')
 

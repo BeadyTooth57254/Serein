@@ -32,7 +32,7 @@ Scene、日记和批注工具按自用版的名称、参数和默认值提供。
 | 删除日记 | `delete_diary(diary_id)`；软删除，保留历史 |
 | 批注 | `annotate(memory_id, content, author='', role='assistant', annotation_id='')`；作者省略时使用实例 AI 名称，不改原文或证据 |
 
-以上工具不要求模型填写 `operation_id` 或数字版本号。Scene 编辑使用 `read_memory` 返回的 `document.updated_at`，在事务内检查冲突。日记修改在事务内读取和更新当前版本，保持自用版调用方式；不提供调用方跨请求的旧版本校验，写前应先读。锁定日记不可读正文、不可修订、评论或删除。日记没有收藏。
+以上工具不要求模型填写 `operation_id` 或数字版本号。Scene 编辑使用 `read_memory` 文本中的 `updated_at`，在事务内检查冲突。日记修改在事务内读取和更新当前版本，保持自用版调用方式；不提供调用方跨请求的旧版本校验，写前应先读。锁定日记不可读正文、不可修订、评论或删除。日记没有收藏。
 
 Scene 和日记的新建调用会独立创建内容；内部随机操作编号不等于跨请求自动去重。响应丢失时先读回确认，不要盲目重复保存。完整的 rc65 旧参数（包含 `operation_id`）仍通过内部兼容入口处理，保留旧重试回执和数字版本校验；新旧参数不能混用，兼容入口同样受工具白名单与只读权限约束。
 
@@ -116,7 +116,7 @@ Persona 是只读的状态卡片展示页：当前心情、内心独白/余韵�
 
 材料编号目录包含已绑定、可读取的上传材料（upload）；仅提及、明确排除或不可读取的材料不进入编号目录。编号 0 是叙事卷正文，其余编号从当前目录复制，不能用材料总数代替编号。上传材料只在显式读取时返回正文。
 
-公开版 MCP `read_arc_materials` 每次完整返回最多4000 UTF-16单位（包含转义与content包装）。小结果保留原字段并附带 `has_more=false`；长结果使用 `page_format=json_fragment` 分片约定，将各页 `content` 按 `content_offset` 拼接，到 `content_complete=true` 才得到完整 JSON 结果。保持所有查询参数不变，把 `next_cursor` 传入 `cursor`，读至 `has_more=false`；正文、来源 ID 和元数据均完整保留，不额外返回重复的 structuredContent。每页重新核对当前读取权限、内容和查询条件；变更后旧游标失效，应刷新目录重新读。`offset/limit` 仍按材料条数分页，读完当前结果的全部分片后才使用 `next_offset`，并清空 cursor。HTTP 与内部读取接口保持原有返回格式。
+公开版 MCP 的 `read_memory`、`recall_memory`、`find_arc`、`read_arc_materials`、`read_diary` 和 `read_favorites` 统一只返回一个可读文本块，不附 `structuredContent`，也不再复制一份 JSON 字符串。文本按适用范围包含类型、状态、ID、标题、日期／时间、版本、更新时间、作者、正文、评论／批注、绑定原文的 source_id 与原消息编号，以及叙事卷材料菜单。Event 没有评论时明确显示 0；`with_evidence=true` 才展开绑定原文正文。`read_arc_materials` 继续用 `offset/limit` 按材料条数分页；超出客户端单次长度时返回纯文本 `[text_page]` 分片，保持选择参数不变并传回 `next_cursor`，按 `content_offset` 拼接 `text:` 后的内容。HTTP 与 UI 使用的内部读取接口保持结构化返回，不受 MCP 展示格式影响。
 
 `/resume` 在服务内部读取并合并全部接续资料后一次性交给模型，模型无需逐页调用工具。内部分页不改变完整注入行为；Arc 材料工具的分页用于独立的显式材料查阅。
 

@@ -495,6 +495,7 @@
   "src/serein/recall/person_references.py",
   "tests/test_personal_recall.py",
   "tests/test_automatic_scope_recall.py",
+  "src/serein/api/read_text.py",
   "web/src/utils/recallSimulationDiagnostics.js",
   "web/tests/recall-simulation-diagnostics.test.mjs"
 ]

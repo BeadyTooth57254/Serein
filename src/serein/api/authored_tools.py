@@ -12,6 +12,7 @@ from ..compat.scenes import Scenes, sources
 from ..core.personal import Personal
 from ..core.store import Store, now
 from ..deployment import read_settings
+from .read_text import diary_text
 
 
 def tools_for(services, settings):
@@ -46,7 +47,7 @@ def tools_for(services, settings):
 
     def read_diary(diary_id: int | None = None, date: str = '', limit: int = 20):
         """Read diaries by ID or date, respecting locked/deleted entries. Omit selectors to list recent entries."""
-        return notebook('read', diary_id=diary_id, date=date, limit=limit)
+        return diary_text(notebook('read', diary_id=diary_id, date=date, limit=limit))
 
     tools = {'read_diary': read_diary}
     if not settings.writable:
