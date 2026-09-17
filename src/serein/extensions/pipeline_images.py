@@ -7,10 +7,79 @@ import json
 import re
 import http.client
 import ssl
-from urllib.parse import urlsplit
+import time
+from urllib.parse import urljoin, urlsplit
 
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
 MAX_TOTAL_BYTES = 40 * 1024 * 1024
+MAX_IMAGE_REDIRECTS = 3
+IMAGE_DOWNLOAD_TIMEOUT_SECONDS = 20
+
+
+def _public_image_target(url):
+    try:
+        parsed = urlsplit(url)
+        port = parsed.port or (443 if parsed.scheme == 'https' else 80)
+    except ValueError:
+        raise ValueError('图片地址无效') from None
+    if (parsed.scheme not in ('https', 'http') or not parsed.hostname
+            or parsed.username or parsed.password):
+        raise ValueError('图片地址无效')
+    addresses = socket.getaddrinfo(parsed.hostname, port)
+    try:
+        public = bool(addresses) and all(ipaddress.ip_address(item[4][0]).is_global for item in addresses)
+    except ValueError:
+        public = False
+    if not public:
+        raise ValueError('附件地址必须是公开图片地址或直接上传的图片数据')
+    return parsed, port, addresses
+
+
+def _remote_image_bytes(url):
+    current = url
+    visited = set()
+    deadline = time.monotonic() + IMAGE_DOWNLOAD_TIMEOUT_SECONDS
+    for redirect_count in range(MAX_IMAGE_REDIRECTS + 1):
+        if current in visited:
+            raise ValueError('图片重定向形成循环')
+        visited.add(current)
+        parsed, port, addresses = _public_image_target(current)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise ValueError('读取原图超时')
+        # Connect to the checked address, retaining hostname for Host and TLS.
+        # Every redirect is resolved and pinned again, so a public URL cannot
+        # redirect or rebind the downloader onto an internal service.
+        connection = http.client.HTTPConnection(parsed.hostname, port, timeout=remaining)
+        try:
+            connection.sock = socket.create_connection((addresses[0][4][0], port), timeout=remaining)
+            if parsed.scheme == 'https':
+                connection.sock = ssl.create_default_context().wrap_socket(
+                    connection.sock, server_hostname=parsed.hostname)
+            connection.request('GET', (parsed.path or '/') + ('?' + parsed.query if parsed.query else ''))
+            response = connection.getresponse()
+            if response.status == 200:
+                body = bytearray()
+                while chunk := response.read(65536):
+                    body.extend(chunk)
+                    if len(body) > MAX_IMAGE_BYTES:
+                        raise ValueError('图片超过 10 MB')
+                return bytes(body)
+            if response.status not in (301, 302, 303, 307, 308):
+                raise ValueError(f'读取原图失败（HTTP {response.status}）')
+            if redirect_count >= MAX_IMAGE_REDIRECTS:
+                raise ValueError(f'图片重定向超过 {MAX_IMAGE_REDIRECTS} 次')
+            location = response.getheader('Location')
+            if not isinstance(location, str) or not location.strip() or len(location) > 4096:
+                raise ValueError('图片重定向缺少有效 Location')
+            next_url = urljoin(current, location.strip())
+            next_parsed = urlsplit(next_url)
+            if parsed.scheme == 'https' and next_parsed.scheme != 'https':
+                raise ValueError('图片重定向不能从 HTTPS 降级到 HTTP')
+            current = next_url
+        finally:
+            connection.close()
+    raise ValueError(f'图片重定向超过 {MAX_IMAGE_REDIRECTS} 次')
 
 
 def image_bytes(url):
@@ -20,29 +89,7 @@ def image_bytes(url):
             raise ValueError('图片编码无效或超过 10 MB')
         body = base64.b64decode(encoded, validate=True)
     else:
-        parsed = urlsplit(url)
-        if parsed.scheme not in ('https', 'http') or not parsed.hostname or parsed.username or parsed.password:
-            raise ValueError('图片地址无效')
-        addresses = socket.getaddrinfo(parsed.hostname, parsed.port or (443 if parsed.scheme == 'https' else 80))
-        if not addresses or any(not ipaddress.ip_address(item[4][0]).is_global for item in addresses):
-            raise ValueError('附件地址必须是公开图片地址或直接上传的图片数据')
-        # Connect to the checked address, retaining hostname for Host and TLS.
-        # A second DNS resolution must not turn a public attachment into an internal request.
-        connection=http.client.HTTPConnection(parsed.hostname,parsed.port or (443 if parsed.scheme=='https' else 80),timeout=20)
-        try:
-            connection.sock=socket.create_connection((addresses[0][4][0],connection.port),timeout=20)
-            if parsed.scheme=='https':
-                connection.sock=ssl.create_default_context().wrap_socket(connection.sock,server_hostname=parsed.hostname)
-            connection.request('GET',(parsed.path or '/')+('?' + parsed.query if parsed.query else ''))
-            response=connection.getresponse()
-            if response.status!=200:raise ValueError(f'读取原图失败（HTTP {response.status}）')
-            body = bytearray()
-            while chunk:=response.read(65536):
-                body.extend(chunk)
-                if len(body) > MAX_IMAGE_BYTES:
-                    raise ValueError('图片超过 10 MB')
-            body = bytes(body)
-        finally:connection.close()
+        body = _remote_image_bytes(url)
     if not body or len(body) > MAX_IMAGE_BYTES:
         raise ValueError('图片为空或超过 10 MB')
     if body.startswith(b'\x89PNG\r\n\x1a\n'): mime = 'image/png'

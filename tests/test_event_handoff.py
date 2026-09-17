@@ -229,3 +229,74 @@ def test_remote_images_pin_validated_address_and_reject_internal_targets(monkeyp
     monkeypatch.setattr(images.socket,'getaddrinfo',lambda *args:[(2,1,6,'',('127.0.0.1',80))])
     with pytest.raises(ValueError):images.image_bytes('http://example.test/private')
     assert len(connected)==1
+
+
+def test_remote_images_follow_bounded_revalidated_redirects(monkeypatch):
+    from serein.extensions import pipeline_images as images
+    import base64
+    addresses={'short.test':'8.8.8.8','cdn.test':'1.1.1.1'}
+    connected=[];requests=[];responses={
+        ('short.test','/start'): (302,'/next',b''),
+        ('short.test','/next'): (307,'http://cdn.test/book.png',b''),
+        ('cdn.test','/book.png'): (200,None,base64.b64decode(PNG.split(',')[1])),
+    }
+    monkeypatch.setattr(images.socket,'getaddrinfo',lambda host,port:[(2,1,6,'',(addresses[host],port))])
+    monkeypatch.setattr(images.socket,'create_connection',lambda address,**kwargs:connected.append(address))
+    class Reply:
+        def __init__(self,status,location,body):self.status=status;self.location=location;self.body=body
+        def getheader(self,name):return self.location if name.lower()=='location' else None
+        def read(self,size):body,self.body=self.body,b'';return body
+    class Connection:
+        def __init__(self,host,port,**kwargs):self.host=host;self.port=port
+        def request(self,method,path):self.path=path;requests.append((self.host,path))
+        def getresponse(self):return Reply(*responses[(self.host,self.path)])
+        def close(self):pass
+    monkeypatch.setattr(images.http.client,'HTTPConnection',Connection)
+    assert images.image_bytes('http://short.test/start')[1]=='image/png'
+    assert requests==[('short.test','/start'),('short.test','/next'),('cdn.test','/book.png')]
+    assert connected==[('8.8.8.8',80),('8.8.8.8',80),('1.1.1.1',80)]
+
+
+def test_remote_image_redirects_reject_private_targets_and_loops(monkeypatch):
+    from serein.extensions import pipeline_images as images
+    connected=[]
+    def address(host,port):
+        return [(2,1,6,'',(('127.0.0.1' if host=='private.test' else '8.8.8.8'),port))]
+    monkeypatch.setattr(images.socket,'getaddrinfo',address)
+    monkeypatch.setattr(images.socket,'create_connection',lambda target,**kwargs:connected.append(target))
+    class Reply:
+        status=302
+        def __init__(self,location):self.location=location
+        def getheader(self,name):return self.location
+    locations=['http://private.test/image.png','/loop']
+    class Connection:
+        def __init__(self,host,port,**kwargs):self.host=host;self.port=port
+        def request(self,*args):pass
+        def getresponse(self):return Reply(locations.pop(0))
+        def close(self):pass
+    monkeypatch.setattr(images.http.client,'HTTPConnection',Connection)
+    with pytest.raises(ValueError,match='公开图片地址'):
+        images.image_bytes('http://short.test/private')
+    with pytest.raises(ValueError,match='循环'):
+        images.image_bytes('http://short.test/loop')
+    assert connected==[('8.8.8.8',80),('8.8.8.8',80)]
+
+
+def test_remote_image_redirect_limit_is_enforced(monkeypatch):
+    from serein.extensions import pipeline_images as images
+    requests=[]
+    monkeypatch.setattr(images.socket,'getaddrinfo',lambda host,port:[(2,1,6,'',('8.8.8.8',port))])
+    monkeypatch.setattr(images.socket,'create_connection',lambda *args,**kwargs:None)
+    class Reply:
+        status=302
+        def __init__(self,location):self.location=location
+        def getheader(self,name):return self.location
+    class Connection:
+        def __init__(self,host,port,**kwargs):pass
+        def request(self,method,path):requests.append(path)
+        def getresponse(self):return Reply(f'/hop-{len(requests)}')
+        def close(self):pass
+    monkeypatch.setattr(images.http.client,'HTTPConnection',Connection)
+    with pytest.raises(ValueError,match='超过 3 次'):
+        images.image_bytes('http://short.test/start')
+    assert requests==['/start','/hop-1','/hop-2','/hop-3']
