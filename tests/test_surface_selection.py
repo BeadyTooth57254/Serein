@@ -22,10 +22,10 @@ def legacy(tmp_path,monkeypatch):
         def __init__(self,*a,**kw):pass
         def query(self,text):return dict(query=text,profile=profile,embedding=[1.,0.])
     monkeypatch.setattr('serein.adapters.embedding.EmbeddingClient',Embedding)
-    def build(rows,metadata=None):
+    def build(rows,metadata=None,bodies=None):
         with Store(settings.database) as store:
             for key,kind,score,day in rows:
-                store.create(key,kind,'手机维修 '+key,'手机屏幕坏了，我们带着它到店里维修。',
+                store.create(key,kind,'手机维修 '+key,(bodies or {}).get(key,'手机屏幕坏了，我们带着它到店里维修。'),
                              metadata={'date':day,'local_date':day,**(metadata or {}).get(key,{})})
         build_index(settings.database,settings.index)
         with sqlite3.connect(settings.index) as db:
@@ -112,7 +112,7 @@ def test_surface_candidates_below_old_floor_are_judged_by_reranker(legacy):
     assert engine.run('最近手机维修',method='semantic',mode='lookup',min_cosine=.5)['selected_refs']==[]
 
 
-def test_passage_winner_supplies_original_two_passages_to_reranker(legacy,monkeypatch):
+def test_passage_winner_keeps_short_canonical_body_whole_for_reranker(legacy,monkeypatch):
     settings,build=legacy
     engine,calls=build([('long','scene',.55,'2026-09-01')])
     with Store(settings.database,read_only=True) as store:stamp=content_stamp(store.read('long'))
@@ -126,7 +126,7 @@ def test_passage_winner_supplies_original_two_passages_to_reranker(legacy,monkey
     monkeypatch.setattr('serein.recall.passages.slices',lambda *a,**kw:pytest.fail('Recall attempted to split memory'))
     monkeypatch.setattr('serein.recall.passages.fill_passages',lambda *a,**kw:pytest.fail('Recall attempted to generate passage vectors'))
     result=engine.run('手机维修',method='semantic',min_cosine=.5)
-    assert calls[0]['rerank_text']=='title: 手机维修 long\nbody: 证据 0\n证据 1'
+    assert calls[0]['rerank_text']=='title: 手机维修 long\nbody: 手机屏幕坏了，我们带着它到店里维修。'
     assert result['cards'][0]['score']==.92
     engine.policy=replace(engine.policy,passages_enabled=False)
     calls.clear()
@@ -354,3 +354,34 @@ def test_association_api_toggle_is_persistent_live_and_independent(legacy,monkey
     assert disabled['candidate_policy']['association_enabled'] is False
     with Store(settings.database,read_only=True) as store:
         assert store.conn.execute('SELECT count(*) FROM scene_relations WHERE active=1').fetchone()[0]==2
+
+
+@pytest.mark.parametrize('kind', ['scene', 'event'])
+def test_missing_opening_reaches_the_existing_single_reranker_call(legacy, kind):
+    from dataclasses import replace
+    settings, build = legacy
+    opening = 'Mira和Orion第一次是在读书会上认识的。'
+    parts = [opening + '一起讨论了那本书。' * 12, '后来一起散步。' * 15, '现在仍然喜欢彼此。' * 15]
+    body = '\n'.join(parts)
+    engine, _ = build([('opening', kind, .55, '2026-09-01')], bodies={'opening': body})
+    engine.policy = replace(engine.policy, passages_enabled=True)
+    with Store(settings.database, read_only=True) as store:
+        stamp = content_stamp(store.read('opening'))
+    with sqlite3.connect(settings.index) as db:
+        ensure_tables(db)
+        start = 0
+        for ordinal, (part, score) in enumerate(zip(parts, (.6, .88, .92))):
+            db.execute('INSERT INTO passages VALUES (?,?,?,?,?,?,?,?,?)',
+                       ('opening', ordinal, stamp, start, start + len(part), part,
+                        json.dumps([score, math.sqrt(1-score*score)]), 2, 'test'))
+            start += len(part) + 1
+    calls = []
+    def rank(query, documents):
+        calls.append((query, documents))
+        return {d['ref']: .9 if opening in d['rerank_text'] else .01 for d in documents}
+    engine.reranker = rank
+    result = engine.run('我们是怎么认识的？', method='semantic', min_cosine=.5)
+    assert len(calls) == 1
+    assert calls[0][1][0]['rerank_text'] == f'title: 手机维修 opening\nbody: {body}'
+    assert result['selected_refs'] == [f'{kind}:opening']
+    assert result['cards'][0]['score'] == .92

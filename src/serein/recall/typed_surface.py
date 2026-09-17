@@ -23,6 +23,7 @@ from .germany.memory_recall.typed_candidate_shadow import rerank_lane_with_fresh
 from .index import Search, content_stamp, unit_vector
 from .rendering import render
 from .person_references import resolve_person_references
+from .reranker_input import memory_document
 from .legacy_indexes import lexical_index, cue_index
 from .germany.memory_recall.fact_event_lexical_shadow import _source_hash as lexical_hash
 from ..deployment import read_from_store
@@ -512,7 +513,8 @@ def run(engine, query, result, gate, decision, embedding, *, cutoff, limit, use_
             if remaining is not None and remaining < 1.8:
                 return {**result,'status':'skipped','reason':'hook_deadline_before_reranker','admission':admission}
             documents=[{'ref':upstream._typed_owner_ref(row),'title':'', 'body':'',
-                        'rerank_text':upstream._typed_reranker_document(row)} for row in rows]
+                        'rerank_text':memory_document(snapshot.objects[row['owner_id']]['document'],
+                            snapshot.passages.get(row['owner_id'], []))} for row in rows]
             from ..adapters.reranker import RerankerClient, RerankerProviderError
             try:
                 if remaining is not None and isinstance(engine.reranker,RerankerClient):
