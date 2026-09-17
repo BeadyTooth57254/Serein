@@ -19,9 +19,8 @@ from ..chat_observation import ChatObservation, recall_summary
 from ..chat_archive import prepare_turn, archive_turn, archive_user_turn
 
 
-async def prepare_image_transcription(settings, turn, state):
-    if (not state['features'].get('image_transcription') or turn is None
-            or not turn['user'].get('attachments')):
+async def transcribe_image_turn(settings, turn):
+    if turn is None or not turn['user'].get('attachments'):
         return '', {}
     model = task_model(settings.database, 'image_transcription')
     if not model:
@@ -49,6 +48,39 @@ async def prepare_image_transcription(settings, turn, state):
         mark_transcription(settings, [message_id], 'failed', error=type(error).__name__)
         raise HTTPException(502, 'Image transcription failed; the chat model was not called') from None
     return transcription_context(rows), {'status':'complete','message_id':message_id,'images':len(rows)}
+
+
+async def prepare_image_transcription(settings, turn, state):
+    """Compatibility wrapper for the synchronous Eyes path."""
+    features = state.get('features', {})
+    if not (features.get('image_eyes') or features.get('image_transcription')):
+        return '', {}
+    return await transcribe_image_turn(settings, turn)
+
+
+async def transcribe_image_turn_in_background(settings, turn):
+    try:
+        await transcribe_image_turn(settings, turn)
+    except Exception as error:
+        logging.getLogger(__name__).error('Async image transcription failed: %s', type(error).__name__)
+
+
+def remove_images_for_eyes(messages):
+    """Keep the archived source intact while making a text-only main-model payload."""
+    rewritten = deepcopy(messages)
+    for message in rewritten:
+        if not isinstance(message, dict) or not isinstance(message.get('content'), list):
+            continue
+        content = [part for part in message['content']
+                   if not (isinstance(part, dict) and part.get('type') == 'image_url')]
+        if len(content) == len(message['content']):
+            continue
+        if content and all(isinstance(part, dict) and part.get('type') in ('text','input_text') for part in content):
+            message['content'] = ''.join(str(part.get('text') or part.get('input_text') or '') for part in content)
+        else:
+            message['content'] = content or (
+                '[Serein Eyes transcribed the attached image; use the system-provided transcription.]')
+    return rewritten
 
 
 def current_time_context(timezone):
@@ -110,9 +142,15 @@ def routes(settings, services, auth):
         query = context._extract_current_turn_user_query(incoming)
         observation.start(window_id, query, use_memory)
         archive_input = prepare_turn(window_id, incoming)
-        image_context, image_receipt = await prepare_image_transcription(settings, archive_input, state)
-        if image_receipt:
-            observation.payload['image_transcription'] = image_receipt
+        image_context = ''
+        if state['features'].get('image_eyes'):
+            image_context, image_receipt = await transcribe_image_turn(settings, archive_input)
+            if image_receipt:
+                observation.payload['image_transcription'] = {**image_receipt, 'mode':'eyes'}
+        elif state['features'].get('image_transcription_async') and archive_input and archive_input['user'].get('attachments'):
+            background_tasks.add_task(transcribe_image_turn_in_background, settings, archive_input)
+            observation.payload['image_transcription'] = {'status':'scheduled','mode':'async',
+                'images':len(archive_input['user']['attachments'])}
         model = task_model(settings.database, 'chat', requested=str(body.get('model') or ''))
         if not model:
             raise HTTPException(503, 'Configure upstreams and models in Settings')
@@ -142,7 +180,7 @@ def routes(settings, services, auth):
             recall_state = 'disabled' if not use_memory else 'replayed'
         else:
             stable = activity = recalled = ''
-            messages = incoming
+            messages = remove_images_for_eyes(incoming) if state['features'].get('image_eyes') else incoming
             retained_anchor = ''
             if resume_query is None and state['features']['resume']:
                 resume_snapshot = await asyncio.to_thread(chat_resume.retained, services, window_id, incoming, context)

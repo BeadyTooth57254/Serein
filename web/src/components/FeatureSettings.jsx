@@ -3,7 +3,8 @@ import {ResumeMemoryPicker} from './ResumeMemoryPicker.jsx';
 import {instanceSettings} from '../storage/instanceStore.js';
 
 const features = {
-  image_transcription:['聊天图片先转录','收到图片后先用“图片转录”模型读取可见文字，保存到原始消息的专用字段，再把转录和原消息一起交给聊天模型。默认关闭；需先在“配置”页选择图片转录模型。'],
+  image_transcription_async:['异步图片转录','原图照常交给能识图的主模型；回复完成后在后台转录，并把结果写回同一条原始消息。不阻塞当前回复，也不把转录注入当前聊天。'],
+  image_eyes:['眼睛（主模型不能识图时）','先由图片转录模型看图，把转录注入当前聊天，再移除发往主模型的原图；原始消息仍保存原图和转录。与“异步图片转录”只能开启一个。'],
   current_time:['当前日期时间','每个新用户轮次向聊天主模型注入所选时区的日期和时间；工具续轮沿用该轮时间。只保证当轮请求能看到时间，Serein 无法修改客户端已落盘的消息记录。'],
   memos:['备忘','留给未来的话。到期时带入聊天；关闭后不注册备忘工具。'],
   persona:['心绪','记录并延续对话状态。请在“配置”页选择“心绪/防撤退”使用的模型。'],
@@ -39,7 +40,8 @@ export function FeatureSettings({onOpenSummary,onOpenEventGuide}) {
         <input type="checkbox" role="switch" aria-labelledby="automatic-summary-label" disabled={busy} checked={autoEnabled} onChange={event=>setAutoEnabled(event.target.checked)}/></div>
       {Object.entries(features).map(([key,[label,help]])=><label className="settings-toggle" key={key}>
       <span><strong>{label}</strong><small>{help}</small></span><input type="checkbox" role="switch" aria-label={label} disabled={busy} checked={!!values[key]}
-        onChange={event=>setValues(current=>({...current,[key]:event.target.checked}))}/></label>)}
+        onChange={event=>setValues(current=>({...current,[key]:event.target.checked,
+          ...(event.target.checked&&key==='image_transcription_async'?{image_eyes:false}:event.target.checked&&key==='image_eyes'?{image_transcription_async:false}:{})}))}/></label>)}
       {values.current_time&&<label className="settings-field time-context-zone"><span>时间戳时区</span><select disabled={busy} value={clock.timezone}
         onChange={event=>setClock({timezone:event.target.value})}>{timeZones.map(zone=><option value={zone} key={zone}>{zone}</option>)}</select>
         <small>默认 Asia/Shanghai（东八区）；注入内容也会写明当时的 UTC 偏移。</small></label>}

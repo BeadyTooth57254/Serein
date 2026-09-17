@@ -8,7 +8,7 @@ import {upstreamsForSave} from '../upstreamSecrets.js';
 
 const tasks = {writer:"Narrative Writer",embedding:"Embedding",reranker:"Reranker",
   relations:"Scene 关系",dreams:"梦境",narrative_scout:"叙事卷找材料",persona:"心绪/防撤退",
-  track_router:"原话 · 归线",image_transcription:"图片转录（聊天 / 自动摘要）",event_curator:"原话 · 切分",event_writer:"原话 · Event 写作",operit_tagging:"打标",arc_linker:"Event · Arc 归档"};
+  track_router:"原话 · 归线",image_transcription:"图片转录 / 眼睛（聊天 / 自动摘要）",event_curator:"原话 · 切分",event_writer:"原话 · Event 写作",operit_tagging:"打标",arc_linker:"Event · Arc 归档"};
 
 const taskGroups = [
   {key:"creation",title:"对话与创作",help:"陪伴状态、梦境和叙事内容使用的模型。",tasks:["writer","persona","dreams","narrative_scout"]},
