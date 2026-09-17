@@ -63,7 +63,7 @@ def narrative_menu_lines(menu: dict[str, Any]) -> list[str]:
         lines.append(f"[{item['index']}] {item['kind']}: {item.get('title') or item['id']}{day} (id={item['id']})")
     if menu.get("menu_truncated"):
         lines.append("menu_truncated: true")
-    lines.extend((f'Use read_arc_materials(identifier="{key}", picks=[numbers]) to read up to 5 items.',
+    lines.extend((f'Use read_arc_materials(arc_key="{key}", picks=[numbers]) to read up to 5 items.',
                   "[/narrative_menu]"))
     return lines
 

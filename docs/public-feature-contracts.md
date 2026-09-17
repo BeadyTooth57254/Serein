@@ -112,7 +112,7 @@ Persona 是只读的状态卡片展示页：当前心情、内心独白/余韵�
 
 `find_arc(query, limit=5)` 先按全部检索词匹配标题与正文；无结果时，最多 12 个由空白分隔的关键词会分别查找，匹配更多关键词的卷优先。同词去重，支持普通空格、全角空格、换行和制表符。回退时返回 `match_mode=keyword_fallback`，每项注明 `matched_keywords`；没有匹配仍返回空列表。此行为仅用于主动查卷，不调整 Scene/Event 自动召回准入。
 
-返回的是标题与 ID，不包含整卷正文。用 `read_memory(identifier=卷ID, kind="narrative")` 读正文，或 `read_arc_materials(identifier=卷ID)` 读材料列表；已有 `arc_key` 时也把它传给 `identifier`，可用 `read_arc_materials(identifier=key, picks=[编号])` 按召回目录读取。
+返回的是标题与 ID，不包含整卷正文。用 `read_memory(identifier=卷ID, kind="narrative")` 读正文，或 `read_arc_materials(identifier=卷ID)` 读材料列表；已有 `arc_key` 时也可用 `read_arc_materials(arc_key=key, picks=[编号])` 按召回目录读取。
 
 材料编号目录包含已绑定、可读取的上传材料（upload）；仅提及、明确排除或不可读取的材料不进入编号目录。编号 0 是叙事卷正文，其余编号从当前目录复制，不能用材料总数代替编号。上传材料只在显式读取时返回正文。
 
