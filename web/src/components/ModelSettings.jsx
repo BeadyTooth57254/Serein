@@ -9,6 +9,18 @@ const tasks = {writer:"Narrative Writer",embedding:"Embedding",reranker:"Reranke
   relations:"Scene 关系",dreams:"梦境",narrative_scout:"叙事卷找材料",persona:"心绪/防撤退",
   track_router:"原话 · 归线",image_transcription:"图片转录（聊天 / 自动摘要）",event_curator:"原话 · 切分",event_writer:"原话 · Event 写作",operit_tagging:"打标",arc_linker:"Event · Arc 归档"};
 
+const taskGroups = [
+  {key:"creation",title:"对话与创作",help:"陪伴状态、梦境和叙事内容使用的模型。",tasks:["writer","persona","dreams","narrative_scout"]},
+  {key:"retrieval",title:"记忆检索与整理",help:"负责检索、关系判断、打标和归档。",tasks:["embedding","reranker","relations","operit_tagging","arc_linker"]},
+  {key:"events",title:"原话自动摘要",help:"从原话归线、读图、切分，再写成 Event。",tasks:["image_transcription","track_router","event_curator","event_writer"]},
+];
+
+const taskLinks = {
+  image_transcription:{href:"https://www.agnes-ai.com/zh-Hans/docs/agnes-30-flash",label:"Agnes 3.0 Flash（暂时免费）"},
+  embedding:{href:"https://cloud.siliconflow.cn/i/NCXr2PLP",label:"硅基流动（邀请链接）"},
+  reranker:{href:"https://cloud.siliconflow.cn/i/NCXr2PLP",label:"硅基流动（邀请链接）"},
+};
+
 export function ModelSettings({page,summaryRequest=0,onOpenPipeline,onOpenCatalog,onOpenAssignments,
   recallThreshold,setRecallThreshold,candidateThresholdDraft,setCandidateThresholdDraft,
   passageDraft,setPassageDraft}) {
@@ -98,10 +110,14 @@ export function ModelSettings({page,summaryRequest=0,onOpenPipeline,onOpenCatalo
       <section className="settings-group" aria-label="各功能使用的模型">
         {config&&<form onSubmit={save}>
       <div className="settings-group__heading model-assignments-heading"><h3>功能使用的模型</h3><p>已选为向量或重排的模型不出现在聊天模型选项中，各功能可在此选择已配置的模型。留空的可选任务保持关闭。</p></div>
-      <div className="model-assignments">{Object.entries(tasks).map(([key,label])=><label className="settings-field" key={key}><span>{label}</span>
-        <select value={config.assignments[key] || ""} onChange={event=>setConfig(current=>({...current,assignments:{...current.assignments,[key]:event.target.value}}))}>
-          <option value="">未选择</option>{taskModelOptions(availableModels,config.assignments,key).map(model=><option key={model.id} value={model.id}>{model.upstream_name}/{model.label || model.model || "新模型"}</option>)}
-        </select></label>)}</div>
+      <div className="model-assignment-groups">{taskGroups.map(group=><section className="model-assignment-group" key={group.key} aria-labelledby={`model-group-${group.key}`}>
+        <div className="model-assignment-group__heading"><h4 id={`model-group-${group.key}`}>{group.title}</h4><p>{group.help}</p></div>
+        <div className="model-assignments">{group.tasks.map(key=>{const link=taskLinks[key];return <div className="settings-field model-assignment" key={key}>
+          <span><label htmlFor={`task-model-${key}`}>{tasks[key]}</label>{link&&<> · <a className="settings-link model-assignment__link" href={link.href} target="_blank" rel="noreferrer">{link.label}</a></>}</span>
+          <select id={`task-model-${key}`} aria-label={tasks[key]} value={config.assignments[key] || ""} onChange={event=>setConfig(current=>({...current,assignments:{...current.assignments,[key]:event.target.value}}))}>
+            <option value="">未选择</option>{taskModelOptions(availableModels,config.assignments,key).map(model=><option key={model.id} value={model.id}>{model.upstream_name}/{model.label || model.model || "新模型"}</option>)}
+          </select></div>})}</div>
+      </section>)}</div>
       <p className="model-connection-help">Event Writer 要核对原话、人物、因果和修订，再写出自然正文；建议为“原话 · Event 写作”选择理解和写作能力较强的模型。</p>
       <p className="model-connection-help">“打标”为事件和 Scene 补充主域大标签、提取有原文出处的实体，也为长记忆已有的 cues 绑定 passage。已有主域和正文保持不变；实体别名只留作建议。主域与短描述在地下室的“主域边界”管理。</p>
       <p className="model-connection-help">“Event · Arc 归档”为可选任务：先按 Event 正文中的关键词缩小已有 Arc，再让模型判断是否归入。它不读取聊天原话或叙事卷正文，不创建新 Arc；留空即关闭。</p>
