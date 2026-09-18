@@ -98,8 +98,9 @@ async def execute(database,key,operation,*,queued_id=None):
             with Store(database) as store,store.transaction(immediate=True):
                 if _get(store,key).get('run_id')==run_id:_save(store,key,previous)
             return result
-        progress(result=result,status=state if state in ('awaiting_agent','paused') else 'completed',
-                 stage=state or 'completed',lease_until=0)
+        progress(result=result,status=state if state in ('awaiting_agent','paused','needs_repair') else 'completed',
+                 stage=state or 'completed',lease_until=0,
+                 error=str(result.get('reason','归线材料需要修复')) if state=='needs_repair' else '')
         return result
     except asyncio.CancelledError:
         progress(status='interrupted',lease_until=0,error='服务已停止；已完成步骤保留，点击继续可恢复。')
@@ -124,8 +125,12 @@ async def work(settings,key,arguments):
     if key=='pipeline':
         from .extensions.pipeline import _advance
         events=0;deferred=0;skipped=0;protected=[]
+        # This worker is explicitly enqueued by Continue; scheduled_advance does
+        # not set this flag. Recheck at most the first held batch per request.
+        retry_repair=True
         while True:
-            result=await _advance(settings.database,include_recent=arguments.get('include_recent',True))
+            result=await _advance(settings.database,include_recent=arguments.get('include_recent',True),retry_repair=retry_repair)
+            retry_repair=False
             events+=result.get('events',0)
             deferred+=result.get('deferred',0);skipped+=result.get('skipped',0)
             protected.extend(result.get('protected_deferrals',[]))

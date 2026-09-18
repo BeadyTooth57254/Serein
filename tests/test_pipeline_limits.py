@@ -143,6 +143,58 @@ def test_oversized_pending_batch_reuses_accepted_router_output(settings):
         assert store.conn.execute('SELECT output_json FROM pipeline_jobs').fetchone()[0]==encode(output)
 
 
+def test_interrupted_batch_keeps_its_normalized_routes_after_daytime_flush(settings):
+    """A route written after freezing must not be reinterpreted against old cards."""
+    ingest(settings)
+    p.initialize(settings.database)
+    batch=p.new_batch(settings.database,True)
+    data=json.loads(batch['input_json'])
+    # The router succeeded before interruption.  Daytime routing then persists
+    # its assignment and created Track card, while the frozen batch itself is
+    # still in the old on-disk format without a route snapshot.
+    routed=asyncio.run(p.route_batch(settings.database,batch,data,synthetic_runner))
+    assignments,_,_=p.route_result(data,routed)
+    with Store(settings.database) as store:
+        from serein.extensions import pipeline_tracks as track_state
+        track_state.persist(store.conn,routed['track_state_updates'],data['scope'])
+        for assignment in assignments:
+            store.conn.execute('INSERT INTO pipeline_routes VALUES (?,?)',
+                               (assignment['source_message_id'],encode(assignment)))
+    calls=[]
+    async def runner(role,request):
+        calls.append(role)
+        return output_for(role,request)
+    result=asyncio.run(p.advance(settings.database,include_recent=True,runner=runner))
+    assert result['events']==1
+    assert calls==['event_curator','event_writer']
+    with Store(settings.database,read_only=True) as store:
+        saved=json.loads(store.conn.execute('SELECT input_json FROM pipeline_batches WHERE id=?',(batch['id'],)).fetchone()[0])
+        assert saved['routing_result']['_public_normalized'] is True
+        assert saved['routing_result']['assignments']==assignments
+
+
+def test_bad_cached_track_route_is_held_for_repair_without_consuming_originals(settings):
+    ingest(settings)
+    p.initialize(settings.database)
+    batch=p.new_batch(settings.database,True)
+    data=json.loads(batch['input_json'])
+    with Store(settings.database) as store:
+        for message in data['routing_messages']:
+            store.conn.execute('INSERT INTO pipeline_routes VALUES (?,?)',(message['id'],encode({
+                'source_message_id':message['id'],'primary_track_id':'session_foreign_track_0001',
+                'context_track_ids':[],'routing_role':'primary_activity'})))
+    calls=[]
+    async def runner(role,request):
+        calls.append(role)
+        return output_for(role,request)
+    result=asyncio.run(p.advance(settings.database,include_recent=True,runner=runner))
+    assert result['status']=='needs_repair' and 'session_foreign_track_0001' in result['reason']
+    assert calls==[]
+    with Store(settings.database,read_only=True) as store:
+        assert store.conn.execute('SELECT count(*) FROM raw_processing').fetchone()[0]==0
+        assert store.conn.execute('SELECT status FROM pipeline_batches WHERE id=?',(batch['id'],)).fetchone()[0]=='needs_repair'
+
+
 @pytest.mark.parametrize('role',['track_router','event_curator'])
 def test_id_correction_retry_keeps_bad_output_and_accepts_only_valid(settings,monkeypatch,role):
     ingest(settings)
@@ -274,3 +326,168 @@ def test_enabling_auto_pipeline_starts_after_latest_original_and_reenable_moves_
     with Store(settings.database,read_only=True) as store:
         assert [row[0] for row in store.conn.execute("SELECT raw_id FROM raw_processing WHERE outcome='auto_boundary' ORDER BY raw_id")]==[1,2,3,4,5,6]
         assert [row[0] for row in store.conn.execute('SELECT id FROM raw_events WHERE NOT EXISTS (SELECT 1 FROM raw_processing p WHERE p.raw_id=raw_events.id) ORDER BY id')]==[7,8]
+
+
+def test_legacy_completed_writer_uses_accepted_router_before_conflicting_cache(settings,monkeypatch):
+    """Recover an old-format batch at settle without repeating any model call."""
+    from copy import deepcopy
+    ingest(settings)
+    original_settle=p.settle
+    def interrupted(*args,**kwargs):raise RuntimeError('synthetic interruption before settlement')
+    monkeypatch.setattr(p,'settle',interrupted)
+    with pytest.raises(RuntimeError,match='synthetic interruption'):
+        asyncio.run(p.advance(settings.database,include_recent=True,runner=synthetic_runner))
+    monkeypatch.setattr(p,'settle',original_settle)
+    with Store(settings.database) as store:
+        batch=dict(store.conn.execute("SELECT * FROM pipeline_batches WHERE status='pending'").fetchone())
+        data=json.loads(batch['input_json'])
+        accepted=data.pop('routing_result')
+        # Original versions saved components/jobs, but no batch routing snapshot
+        # and no newly created Track cards until settlement.
+        store.conn.execute('DELETE FROM pipeline_tracks')
+        different=deepcopy(accepted['tracks'][0])
+        different['track_id']='session_'+data['scope']+'_track_0099'
+        store.conn.execute('INSERT INTO pipeline_tracks VALUES (?,?,?)',
+                           (different['track_id'],data['scope'],encode(different)))
+        for a in accepted['assignments']:
+            changed={**a,'primary_track_id':different['track_id']}
+            store.conn.execute('INSERT INTO pipeline_routes VALUES (?,?)',(a['source_message_id'],encode(changed)))
+        store.conn.execute('UPDATE pipeline_batches SET input_json=? WHERE id=?',(encode(data),batch['id']))
+        outputs=dict(store.conn.execute('SELECT id,output_json FROM pipeline_jobs WHERE batch_id=?',(batch['id'],)))
+        writer=json.loads(next(value for key,value in outputs.items() if ':event_writer:' in key))
+    calls=[]
+    async def forbidden(role,request):
+        calls.append(role)
+        pytest.fail('Completed stage was called again: '+role)
+    result=asyncio.run(p.advance(settings.database,include_recent=True,runner=forbidden))
+    assert result['events']==1 and calls==[]
+    with Store(settings.database,read_only=True) as store:
+        row=store.conn.execute('SELECT input_json,status FROM pipeline_batches WHERE id=?',(batch['id'],)).fetchone()
+        assert row['status']=='done'
+        assert json.loads(row['input_json'])['routing_result']['assignments']==accepted['assignments']
+        assert dict(store.conn.execute('SELECT id,output_json FROM pipeline_jobs WHERE batch_id=?',(batch['id'],)))==outputs
+        detail=json.loads(store.conn.execute('SELECT details_json FROM pipeline_event_details').fetchone()[0])
+        assert detail['writer']['event_draft']==writer['event_draft']
+        assert store.conn.execute('SELECT count(*) FROM raw_processing').fetchone()[0]==2
+    assert asyncio.run(p.advance(settings.database,include_recent=True,runner=forbidden))['status']=='current'
+    with Store(settings.database,read_only=True) as store:
+        assert store.conn.execute('SELECT count(*) FROM pipeline_track_events').fetchone()[0]==1
+        assert store.conn.execute('SELECT count(*) FROM fact_event_sources').fetchone()[0]==2
+
+
+def test_router_replay_uses_ordinal_in_accepted_request(settings):
+    ingest(settings)
+    p.initialize(settings.database)
+    batch=p.new_batch(settings.database,True);data=json.loads(batch['input_json'])
+    request=p.request_for(settings.database,batch,'track_router')
+    request['next_track_ordinal']=7
+    asyncio.run(p.job(settings.database,batch,request,'track_router:0',synthetic_runner))
+    async def forbidden(*args):pytest.fail('Accepted Router was repeated')
+    recovered=asyncio.run(p.route_batch(settings.database,batch,data,forbidden))
+    assert recovered['assignments'][0]['primary_track_id']=='session_'+data['scope']+'_track_0007'
+    assert recovered['next_track_ordinal']==8
+
+
+def test_needs_repair_status_is_visible_and_explicitly_revalidated(settings):
+    from fastapi.testclient import TestClient
+    from serein.api.http import create_app
+    ingest(settings);p.initialize(settings.database)
+    batch=p.new_batch(settings.database,True);data=json.loads(batch['input_json'])
+    track='session_'+data['scope']+'_track_0001'
+    with Store(settings.database) as store:
+        for m in data['routing_messages']:
+            store.conn.execute('INSERT INTO pipeline_routes VALUES (?,?)',(m['id'],encode({
+                'source_message_id':m['id'],'primary_track_id':track,
+                'context_track_ids':[],'routing_role':'primary_activity'})))
+    async def forbidden(*args):pytest.fail('Held batch must not call a model')
+    held=asyncio.run(p.advance(settings.database,include_recent=True,runner=forbidden))
+    assert held['status']=='needs_repair'
+    state=work.status(settings.database,'pipeline')
+    assert state['status']=='needs_repair' and track in state['error']
+    client=TestClient(create_app(settings,token='synthetic',live=True),headers={'Authorization':'Bearer synthetic'})
+    response=client.get('/v1/pipeline/status').json()
+    assert response['status']=='needs_repair' and response['result']['batch_id']==batch['id']
+    assert track in response['error']
+    # Simulate a separately verified maintenance repair of the missing card.
+    with Store(settings.database) as store:
+        card={'track_id':track,'subject':'Book club','throughline':'Plan book club',
+              'event_policy':'rolling_engineering','status':'active','last_session_id':data['scope']}
+        store.conn.execute('INSERT INTO pipeline_tracks VALUES (?,?,?)',(track,data['scope'],encode(card)))
+    assert asyncio.run(p.advance(settings.database,include_recent=True,runner=forbidden))['status']=='needs_repair'
+    result=asyncio.run(p.advance(settings.database,include_recent=True,runner=synthetic_runner,retry_repair=True))
+    assert result['events']==1 and work.status(settings.database,'pipeline')['status']=='completed'
+    with Store(settings.database,read_only=True) as store:
+        row=store.conn.execute('SELECT status,input_json FROM pipeline_batches WHERE id=?',(batch['id'],)).fetchone()
+        assert row['status']=='done'
+        assert json.loads(row['input_json'])['last_routing_repair']['previous_result']['status']=='needs_repair'
+        assert store.conn.execute('SELECT count(*) FROM raw_processing').fetchone()[0]==2
+
+
+def test_manual_pipeline_worker_retries_only_first_held_batch(settings,monkeypatch):
+    flags=[]
+    async def advance(database,*,include_recent=False,retry_repair=False):
+        flags.append(retry_repair)
+        if len(flags)==1:return {'status':'processed','events':1,'processed_originals':2}
+        return {'status':'needs_repair','reason':'next batch needs verification'}
+    monkeypatch.setattr(p,'_advance',advance)
+    result=asyncio.run(work.work(settings,'pipeline',{'include_recent':True}))
+    assert flags==[True,False] and result['status']=='needs_repair'
+
+
+def test_component_signature_preserves_bridge_endpoints_and_ownership():
+    from copy import deepcopy
+    original=[{'track_ids':['a','b'],'messages':[{'id':1},{'id':2},{'id':3}],
+        'parked_context_source_ids':[],
+        'memberships':[
+            {'unit_root_message_id':1,'source_message_ids':[1],'track_id':'a','session_id':1,'routing_role':'bridge'},
+            {'unit_root_message_id':2,'source_message_ids':[2],'track_id':'a','session_id':1,'routing_role':'primary_activity'},
+            {'unit_root_message_id':3,'source_message_ids':[3],'track_id':'b','session_id':1,'routing_role':'primary_activity'}],
+        'context_edges':[{'unit_root_message_id':1,'track_id':'b','relation':'bridge'}]}]
+    changed=deepcopy(original)
+    changed[0]['context_edges'][0]['unit_root_message_id']=2
+    changed[0]['memberships'][0]['routing_role']='primary_activity'
+    changed[0]['memberships'][1]['routing_role']='bridge'
+    assert p._component_signature(original)!=p._component_signature(changed)
+    reordered=deepcopy(original)
+    for key in ('track_ids','memberships','messages'):reordered[0][key].reverse()
+    assert p._component_signature(original)==p._component_signature(reordered)
+    changed=deepcopy(original);changed[0]['memberships'][0]['source_message_ids']=[1,2]
+    assert p._component_signature(original)!=p._component_signature(changed)
+
+
+def test_snapshot_preserves_unused_scope_and_newer_track_cards(settings):
+    from copy import deepcopy
+    from serein.extensions import pipeline_tracks as tracks
+    ingest(settings);p.initialize(settings.database)
+    batch=p.new_batch(settings.database,True);data=json.loads(batch['input_json'])
+    routed=asyncio.run(p.route_batch(settings.database,batch,data,synthetic_runner))
+    used=routed['tracks'][0]
+    unused={**deepcopy(used),'track_id':'session_previous_track_0001','last_session_id':'previous',
+            'recent_source_message_ids':[1],'status':'parked'}
+    newer={**deepcopy(used),'last_session_id':'later','recent_source_message_ids':[999],
+           'throughline':'A later continuation must remain intact'}
+    routed['track_state_updates'].append(unused)
+    with Store(settings.database) as store:
+        tracks.persist(store.conn,[unused,newer],data['scope'])
+    p.save_routing_snapshot(settings.database,batch,data,routed)
+    with Store(settings.database,read_only=True) as store:
+        row=store.conn.execute('SELECT scope,card_json FROM pipeline_tracks WHERE id=?',(unused['track_id'],)).fetchone()
+        assert row['scope']=='previous' and json.loads(row['card_json'])['last_session_id']=='previous'
+        row=store.conn.execute('SELECT scope,card_json FROM pipeline_tracks WHERE id=?',(used['track_id'],)).fetchone()
+        assert row['scope']=='later' and json.loads(row['card_json'])==newer
+        frozen=json.loads(store.conn.execute('SELECT input_json FROM pipeline_batches WHERE id=?',(batch['id'],)).fetchone()[0])
+        assert frozen['routing_result']['tracks'][0]['recent_source_message_ids']==used['recent_source_message_ids']
+
+
+@pytest.mark.parametrize('payload',['not-json','null','[]'])
+def test_malformed_route_cache_enters_repair_without_model_calls(settings,payload):
+    ingest(settings);p.initialize(settings.database)
+    batch=p.new_batch(settings.database,True);data=json.loads(batch['input_json'])
+    with Store(settings.database) as store:
+        for m in data['routing_messages']:
+            store.conn.execute('INSERT INTO pipeline_routes VALUES (?,?)',(m['id'],payload))
+    async def forbidden(*args):pytest.fail('Malformed cache reached a model')
+    assert asyncio.run(p.advance(settings.database,include_recent=True,runner=forbidden))['status']=='needs_repair'
+    with Store(settings.database,read_only=True) as store:
+        assert store.conn.execute('SELECT count(*) FROM raw_processing').fetchone()[0]==0
+        assert store.conn.execute('SELECT count(*) FROM pipeline_jobs').fetchone()[0]==0
