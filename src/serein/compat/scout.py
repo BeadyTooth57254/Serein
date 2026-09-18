@@ -1,7 +1,8 @@
 """Programmatic Arc revision scan plus material access for manual theme discovery."""
 
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import datetime
+import hashlib
 
 from .background import SceneReader, germany_config
 from .narratives import narrative_transaction, RevisionInbox, Uploads
@@ -10,6 +11,7 @@ from .diaries import Diaries
 from .germany.narrative_scan import NarrativeScout
 from .germany.narrative_http import NarrativeHTTP
 from .narrative_cleanup import cleanup_retired_bindings
+from ..core.notebook import resolve_entry
 from ..core.store import Store
 
 
@@ -37,53 +39,15 @@ class Scout(NarrativeScout):
         self.scenes = SceneReader(settings.database)
 
     async def _scan_narrative_revision_inbox(self, *, include_external=True, force_external=False):
-        """Check published rolls against their already-linked materials, without a model."""
+        self.config = germany_config(self.settings)
         with narrative_transaction(self.settings.database, write=True) as rolls:
             cleaned = cleanup_retired_bindings(rolls)
-            retired = RevisionInbox(rolls.store).retire_model_candidates()
-        scan_timezone = self._narrative_revision_scan_settings()['timezone']
-        stale_created = []
-        stale_ids = set()
-        checked = 0
-        for summary in self.rolls.revision_targets():
-            narrative = await self.read_narrative(summary['narrative_id'])
-            if narrative.get('status') != 'ok':
-                continue
-            published = self._narrative_timestamp(narrative.get('published_at'), scan_timezone)
-            if published is None:
-                continue
-            checked += 1
-            sources = await self._narrative_material_freshness(narrative, scan_timezone)
-            if not sources:
-                continue
-            latest = max(sources, key=lambda item: self._narrative_timestamp(item.get('updated_at'), scan_timezone)
-                         or datetime.min.replace(tzinfo=timezone.utc))
-            latest_at = self._narrative_timestamp(latest.get('updated_at'), scan_timezone)
-            if latest_at and latest_at > published:
-                stale_ids.add(summary['narrative_id'])
-                stale_created.extend(self.inbox.consider_stale_roll(
-                    narrative, latest_material=latest, material_count=len(sources)))
-        removed = self.inbox.reconcile_stale_rolls(stale_ids)
-        result = {
-            'status': 'ok', 'checked_rolls': checked,
-            'stale_roll_hints_created': len(stale_created),
-            'stale_roll_hints_removed': len(removed),
-            'model_candidates_retired': len(retired),
-            'writes_performed': [
-                {'type': 'narrative_revision_hint', 'proposal_id': item['proposal_id'],
-                 'proposal_kind': 'existing_roll_update'} for item in stale_created
-            ] + [
-                {'type': 'narrative_revision_hint_removed', 'proposal_id': proposal_id,
-                 'proposal_kind': 'existing_roll_update'} for proposal_id in removed
-            ] + [
-                {'type': 'narrative_candidate_retired', 'proposal_id': proposal_id,
-                 'proposal_kind': 'new_roll_candidate'} for proposal_id in retired
-            ],
-        }
-        self.inbox.record_scan(result)
+        result = await super()._scan_narrative_revision_inbox(
+            include_external=include_external, force_external=force_external)
         result['retired_material_bindings_removed'] = cleaned
         result['narrative_writes_performed'] = [
-            {'type': 'retired_material_cleanup', **change, 'body_unchanged': True} for change in cleaned]
+            *result.get('narrative_writes_performed', []),
+            *({'type': 'retired_material_cleanup', **change, 'body_unchanged': True} for change in cleaned)]
         return result
 
     async def read_narrative(self, key):
@@ -98,8 +62,9 @@ class Scout(NarrativeScout):
             return [item for item in materials if item['source_type'] != 'event'
                     or not store.promoted_scene(item['source_id'])]
 
-    async def _active_narrative_material_inventory(self):
-        materials = await super()._active_narrative_material_inventory()
+    async def _active_narrative_material_inventory(self, *, exclude_covered_events=False):
+        materials = await super()._active_narrative_material_inventory(
+            exclude_covered_events=exclude_covered_events)
         with Store(self.settings.database, read_only=True) as store:
             return [item for item in materials if item['source_type'] != 'event'
                     or not store.promoted_scene(item['source_id'])]
@@ -111,7 +76,65 @@ class Scout(NarrativeScout):
             raise ValueError('Narrative Scout role file is empty')
         from ..deployment import identity
         from .germany.identity import render_identity_template
-        return render_identity_template(rules, identity(self.settings.database))
+        rendered = render_identity_template(rules, identity(self.settings.database))
+        return rendered + ('\n\n当前自动 Arc 整理任务：判断新增 Event、Scene、日记应续接输入中的哪个已有 Arc，'
+                           '或由至少两份材料形成新的空白 collecting Arc。只返回指定 JSON；host 校验并写材料关系。'
+                           '不得写叙事正文，不得编造材料 ID 或 narrative_id。')
+
+    def apply_arc_candidates(self, candidates, *, model):
+        """Apply model routing as material-only Arc changes; Narrative prose is never generated."""
+        changes = []
+        with narrative_transaction(self.settings.database, write=True) as rolls:
+            for candidate in candidates:
+                ids = {kind: list(dict.fromkeys(candidate.get(f'source_{kind}_ids') or []))
+                       for kind in ('event', 'scene', 'diary')}
+                valid = True
+                dates = []
+                for kind, values in ids.items():
+                    for raw in values:
+                        key = int(raw) if kind == 'diary' else str(raw)
+                        document = rolls.store.read(str(key)) if kind != 'diary' else None
+                        available = (resolve_entry(rolls.store, key, kind='diary')['resolution'] == 'active'
+                                     if kind == 'diary' else bool(document and document['kind'] == kind and document['lifecycle'] == 'active'))
+                        if not available:
+                            valid = False
+                            break
+                        stamp = (str(document['metadata'].get('local_date') or document['metadata'].get('date') or '')[:10]
+                                 if document else '')
+                        if stamp:
+                            dates.append(stamp)
+                    if not valid:
+                        break
+                if not valid:
+                    continue
+                target = str(candidate.get('target_narrative_id') or '')
+                if target:
+                    result = rolls.append_materials_without_body(target,
+                        {f'{kind}_ids': values for kind, values in ids.items()}, model=model)
+                    if result.get('status') == 'updated':
+                        changes.append({'type': 'existing_arc_materials', **result})
+                    continue
+                if sum(map(len, ids.values())) < 2:
+                    continue
+                material_keys = sorted(f'{kind}:{key}' for kind, values in ids.items() for key in values)
+                stamp = hashlib.sha256('\n'.join(material_keys).encode()).hexdigest()[:24]
+                narrative_id = 'narrative_auto_' + stamp
+                title = str(candidate.get('title') or '').strip()[:16]
+                if not title:
+                    continue
+                ledger = '\n'.join(f'- {key}' for key in material_keys)
+                result = rolls.publish(narrative_id=narrative_id, expected_revision=0, title=title,
+                    document=f'# {title}\n\n## 第一人称叙事\n\n## 来源账\n\n{ledger}\n',
+                    arc_key='arc:auto:' + stamp, publication_status='collecting', query_cues=[title],
+                    current_status_cue=str(candidate.get('reason') or '')[:500],
+                    time_start=min(dates) if dates else '', time_end=max(dates) if dates else '',
+                    source_event_ids=ids['event'], source_scene_ids=ids['scene'],
+                    source_diary_ids=[int(value) for value in ids['diary']])
+                if result.get('status') == 'created':
+                    changes.append({'type': 'new_collecting_arc', 'narrative_id': narrative_id,
+                                    'revision': result['revision'], 'body_unchanged': True,
+                                    'material_ids': ids, 'model': model})
+        return changes
 
     async def run_due(self, current=None):
         config = self._narrative_revision_scan_settings()

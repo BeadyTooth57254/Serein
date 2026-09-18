@@ -38,6 +38,15 @@ def test_current_time_defaults_and_timezone_validation(deployment):
     assert client.patch('/v1/settings',json={'clock':{'timezone':'Not/A_Timezone'}}).status_code==422
 
 
+def test_nightly_arc_organization_is_opt_in(deployment):
+    settings, client = deployment
+    assert client.get('/v1/settings').json()['features']['narrative_nightly_organize'] is False
+    saved = client.patch('/v1/settings', json={'features':{'narrative_nightly_organize':True}})
+    assert saved.status_code == 200
+    assert saved.json()['features']['narrative_nightly_organize'] is True
+    assert read_settings(settings.database)['features']['narrative_nightly_organize'] is True
+
+
 def test_passage_settings_are_optional_strict_and_independent(deployment):
     from serein.configured_models import recall_settings
     from serein.deployment import save_settings

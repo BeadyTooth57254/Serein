@@ -1,10 +1,12 @@
 """Narrative registry and review queue persisted in the canonical SQLite database."""
 
 import json
+from copy import deepcopy
 from contextlib import contextmanager
 from threading import RLock
 
 from ..core.store import Store, digest, encode, now
+from ..core.notebook import resolve_entry
 from ..ingest.legacy_narrative import KINDS, add_material
 from .germany.narrative_rolls import NarrativeRollStore, _extract_body
 from .germany.narrative_revision_inbox import NarrativeRevisionInbox
@@ -82,6 +84,43 @@ class Narratives(NarrativeRollStore):
             add_material(self.store, key, entry['revision'], 'arc_event_links', 'event',
                          row['event_id'], 'appended', json.loads(row['metadata_json']))
         self.store.conn.execute('INSERT INTO index_outbox(document_id) VALUES (?)', (key,))
+
+    def append_materials_without_body(self, narrative_id, additions, *, model=''):
+        """Append verified material membership while preserving authored prose and publish time."""
+        current = self.read(narrative_id)
+        if current.get('status') != 'ok' or current.get('lifecycle') != 'active':
+            return {'status': 'conflict', 'reason': 'narrative_unavailable', 'narrative_id': narrative_id}
+        entry = deepcopy(self.store.read(narrative_id)['metadata']['legacy_registry'])
+        old_entry = deepcopy(entry)
+        added = {kind: [] for kind in ('event', 'scene', 'diary')}
+        for kind in added:
+            field = f'linked_{kind}_ids'
+            existing = list(entry.get(field) or [])
+            excluded = {str(value) for value in entry.get(f'excluded_{kind}_ids') or []}
+            for raw in additions.get(f'{kind}_ids') or []:
+                key = int(raw) if kind == 'diary' else str(raw)
+                document = self.store.read(str(key)) if kind != 'diary' else None
+                available = (resolve_entry(self.store, key, kind='diary')['resolution'] == 'active'
+                             if kind == 'diary' else bool(document and document['kind'] == kind and document['lifecycle'] == 'active'))
+                if not available or str(key) in excluded or key in existing:
+                    continue
+                existing.append(key)
+                added[kind].append(key)
+            entry[field] = existing
+        if not any(added.values()):
+            return {'status': 'idempotent', 'narrative_id': narrative_id, 'added': added}
+        previous = old_entry
+        previous.pop('history', None)
+        entry['history'] = [*entry.get('history', []), previous]
+        entry['revision'] = int(entry.get('revision') or 0) + 1
+        entry['source_file'] = f"sqlite:{narrative_id}/revision-{entry['revision']:04d}"
+        entry['published_by'] = 'serein_auto_arc_scout'
+        ledger = [f'- {kind}:{key}' for kind, ids in added.items() for key in ids]
+        document = current['full_document'].rstrip() + '\n\n## 自动追加材料\n\n' + '\n'.join(ledger) + '\n'
+        entry['document_sha256'] = digest(document)
+        self._persist(entry, document)
+        return {'status': 'updated', 'narrative_id': narrative_id, 'revision': entry['revision'],
+                'added': added, 'model': str(model or ''), 'body_unchanged': True}
 
 
 class RevisionInbox(NarrativeRevisionInbox):

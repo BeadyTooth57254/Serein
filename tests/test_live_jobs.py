@@ -268,3 +268,29 @@ def test_promoted_event_leaves_revision_inbox_and_future_scout_materials(live):
     assert not any(item['source_type'] == 'event' and item['source_id'] == event_id for item in freshness)
     report = asyncio.run(scout._scan_narrative_revision_inbox(include_external=False))
     assert report['checked_rolls'] == 1
+
+
+def test_auto_arc_routes_materials_without_changing_authored_body(live):
+    settings, client = live
+    seed_narrative(client, settings)
+    diary_existing = client.post('/diaries', json={'content':'今天仍记得窗边的雨。','date':'2026-09-18','author':'user','title':'雨夜日记'}).json()['id']
+    diary_new = client.post('/diaries', json={'content':'纸箱终于拆完了。','date':'2026-09-18','author':'user','title':'搬家日记'}).json()['id']
+    with Store(settings.database) as store, store.transaction():
+        store.create('scene_later', 'scene', '后来的一场雨', '后来我们又一起听雨。',
+                     metadata={'object_kind':'scene','date':'2026-09-18'})
+        store.create('scene_new_arc', 'scene', '新住处', '我们开始整理新的房间。',
+                     metadata={'object_kind':'scene','date':'2026-09-18'})
+    before = client.get('/api/narrative-rolls?narrative_id=narrative_test').json()
+    changes = Scout(settings).apply_arc_candidates([
+        {'target_narrative_id':'narrative_test','title':'雨声','reason':'延续同一条雨声叙事',
+         'source_event_ids':[],'source_scene_ids':['scene_later'],'source_diary_ids':[str(diary_existing)]},
+        {'target_narrative_id':'','title':'新房间','reason':'形成新的生活线',
+         'source_event_ids':[],'source_scene_ids':['scene_new_arc'],'source_diary_ids':[str(diary_new)]},
+    ], model='synthetic')
+    assert [item['type'] for item in changes] == ['existing_arc_materials','new_collecting_arc']
+    after = client.get('/api/narrative-rolls?narrative_id=narrative_test').json()
+    assert after['body'] == before['body'] and after['published_at'] == before['published_at']
+    assert after['linked_scene_ids'][-1] == 'scene_later' and after['linked_diary_ids'][-1] == diary_existing
+    created = client.get('/api/narrative-rolls?narrative_id=' + changes[1]['narrative_id']).json()
+    assert created['publication_status'] == 'collecting' and created['body'] == ''
+    assert created['linked_scene_ids'] == ['scene_new_arc'] and created['linked_diary_ids'] == [diary_new]

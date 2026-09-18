@@ -3,11 +3,12 @@ from __future__ import annotations
 import hashlib
 import json as _json_lib
 import logging
-import os
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 from typing import Any
 from ...recall.germany.utils import strip_wikilinks
+from ...core.store import Store
+from ...core.reader import Reader
 from .narrative_revision_scout import build_keyword_corridors, propose_new_roll_candidates
 logger=logging.getLogger(__name__)
 
@@ -26,6 +27,10 @@ def _is_canonical_scene_bucket(bucket):
 
 class NarrativeScout:
 
+    def _event_is_covered_by_scene(self, event_id: str) -> bool:
+        with Store(self.settings.database, read_only=True) as store:
+            return 'covered_by_scene' in store.surface_state(event_id)['reasons']
+
     def _narrative_revision_scan_settings(self, config_arg: dict | None=None) -> dict[str, Any]:
         cfg_source = config_arg if isinstance(config_arg, dict) else self.config
         roll_cfg = cfg_source.get('narrative_rolls', {})
@@ -36,7 +41,7 @@ class NarrativeScout:
             scan_timezone = ZoneInfo(timezone_name)
         except Exception:
             scan_timezone = ZoneInfo('Asia/Shanghai')
-        return {'enabled': _bool_value(roll_cfg.get('revision_scan_enabled'), True), 'hour': _int_between(roll_cfg.get('revision_scan_hour'), 4, 0, 23), 'minute': _int_between(roll_cfg.get('revision_scan_minute'), 0, 0, 59), 'timezone': scan_timezone, 'check_interval_seconds': _int_between(roll_cfg.get('revision_scan_check_interval_minutes'), 15, 1, 1440) * 60, 'new_roll_scout_enabled': _bool_value(roll_cfg.get('new_roll_scout_enabled'), True), 'new_roll_scout_base_url': str(roll_cfg.get('new_roll_scout_base_url') or '').strip().rstrip('/'), 'new_roll_scout_model': str(roll_cfg.get('new_roll_scout_model') or '').strip(), 'new_roll_scout_api_key_env': str(roll_cfg.get('new_roll_scout_api_key_env') or 'SEREIN_SCOUT_KEY').strip(), 'new_roll_scout_seed_limit': _int_between(roll_cfg.get('new_roll_scout_seed_limit'), 24, 2, 80), 'new_roll_scout_keywords_per_seed': _int_between(roll_cfg.get('new_roll_scout_keywords_per_seed'), 8, 2, 16), 'new_roll_scout_candidates_per_seed': _int_between(roll_cfg.get('new_roll_scout_candidates_per_seed'), 12, 2, 24)}
+        return {'enabled': _bool_value(roll_cfg.get('revision_scan_enabled'), True), 'hour': _int_between(roll_cfg.get('revision_scan_hour'), 4, 0, 23), 'minute': _int_between(roll_cfg.get('revision_scan_minute'), 0, 0, 59), 'timezone': scan_timezone, 'check_interval_seconds': _int_between(roll_cfg.get('revision_scan_check_interval_minutes'), 15, 1, 1440) * 60, 'new_roll_scout_seed_limit': _int_between(roll_cfg.get('new_roll_scout_seed_limit'), 24, 2, 80), 'new_roll_scout_keywords_per_seed': _int_between(roll_cfg.get('new_roll_scout_keywords_per_seed'), 8, 2, 16), 'new_roll_scout_candidates_per_seed': _int_between(roll_cfg.get('new_roll_scout_candidates_per_seed'), 12, 2, 24)}
 
     def _narrative_timestamp(self, value: Any, scan_timezone: ZoneInfo) -> datetime | None:
         text = str(value or '').strip()
@@ -85,9 +90,8 @@ class NarrativeScout:
                 sources.append({'source_type': source_type, 'source_id': str(source_id), 'updated_at': updated_at, 'title': str(item.get('title') or f'{source_type} {source_id}'), 'excerpt': content, 'source_sha256': hashlib.sha256(content.encode('utf-8')).hexdigest()})
         return sources
 
-    def _narrative_material_link_index(self) -> tuple[dict[str, set[str]], dict[str, set[str]]]:
-        event_links: dict[str, set[str]] = {}
-        scene_links: dict[str, set[str]] = {}
+    def _narrative_material_link_index(self) -> dict[str, dict[str, set[str]]]:
+        links = {kind: {} for kind in ('event', 'scene', 'diary')}
         for roll in self.rolls._load():
             if str(roll.get('lifecycle') or 'active') != 'active':
                 continue
@@ -97,22 +101,23 @@ class NarrativeScout:
             for event_id in roll.get('linked_event_ids') or []:
                 safe_id = str(event_id or '').strip()
                 if safe_id:
-                    event_links.setdefault(safe_id, set()).add(narrative_id)
+                    links['event'].setdefault(safe_id, set()).add(narrative_id)
             arc_key = str(roll.get('arc_key') or '').strip()
             if arc_key:
                 for link in self.events.arc_event_links(arc_key):
                     safe_id = str(link.get('event_id') or '').strip()
                     if safe_id:
-                        event_links.setdefault(safe_id, set()).add(narrative_id)
-            for scene_id in roll.get('linked_scene_ids') or []:
-                safe_id = str(scene_id or '').strip()
-                if safe_id:
-                    scene_links.setdefault(safe_id, set()).add(narrative_id)
-        return (event_links, scene_links)
+                        links['event'].setdefault(safe_id, set()).add(narrative_id)
+            for kind in ('scene', 'diary'):
+                for source_id in roll.get(f'linked_{kind}_ids') or []:
+                    safe_id = str(source_id or '').strip()
+                    if safe_id:
+                        links[kind].setdefault(safe_id, set()).add(narrative_id)
+        return links
 
-    async def _active_narrative_material_inventory(self) -> list[dict[str, Any]]:
-        """Return every non-archived Event and canonical Scene for lexical one-hop search."""
-        event_links, scene_links = self._narrative_material_link_index()
+    async def _active_narrative_material_inventory(self, *, exclude_covered_events: bool=False) -> list[dict[str, Any]]:
+        """Return every active Event, canonical Scene and readable Diary for Arc routing."""
+        links = self._narrative_material_link_index()
         materials: list[dict[str, Any]] = []
         offset = 0
         while True:
@@ -120,9 +125,9 @@ class NarrativeScout:
             items = page.get('items') or []
             for event in items:
                 event_id = str(event.get('item_id') or '').strip()
-                if not event_id:
+                if not event_id or (exclude_covered_events and self._event_is_covered_by_scene(event_id)):
                     continue
-                bound_ids = sorted(event_links.get(event_id, set()))
+                bound_ids = sorted(links['event'].get(event_id, set()))
                 materials.append({'source_type': 'event', 'source_id': event_id, 'date': str(event.get('local_date') or ''), 'title': str(event.get('title') or ''), 'summary': str(event.get('body') or ''), 'source_excerpt': '', 'search_text': '\n'.join((str(event.get('title') or ''), str(event.get('body') or ''))), 'updated_at': str(event.get('created_at') or ''), 'fingerprint': str(event.get('fingerprint') or ''), 'bound_narrative_ids': bound_ids, 'is_unbound': not bound_ids})
             offset += len(items)
             if not items or offset >= int(page.get('count') or 0):
@@ -140,8 +145,24 @@ class NarrativeScout:
             if not scene_id or not content:
                 continue
             title = str(meta.get('name') or meta.get('title') or scene_id)
-            bound_ids = sorted(scene_links.get(scene_id, set()))
+            bound_ids = sorted(links['scene'].get(scene_id, set()))
             materials.append({'source_type': 'scene', 'source_id': scene_id, 'date': str(meta.get('date') or meta.get('event_date') or meta.get('created') or ''), 'title': title, 'summary': content[:1200], 'source_excerpt': content[:1800], 'search_text': '\n'.join((title, content)), 'updated_at': str(meta.get('updated_at') or meta.get('created') or ''), 'fingerprint': hashlib.sha256(content.encode('utf-8')).hexdigest(), 'bound_narrative_ids': bound_ids, 'is_unbound': not bound_ids})
+        with Reader(self.settings.database) as reader:
+            for key, in reader.store.conn.execute("SELECT id FROM diary_entries WHERE kind='diary'").fetchall():
+                result = reader.read(str(key), kind='diary', with_evidence=False)
+                if not result['readable']:
+                    continue
+                doc = result['document']
+                metadata = doc.get('metadata') or {}
+                content = str(doc.get('body_md') or '')
+                bound_ids = sorted(links['diary'].get(str(key), set()))
+                materials.append({'source_type':'diary','source_id':str(key),
+                    'date':str(metadata.get('date') or ''),'title':str(doc.get('title') or ''),
+                    'summary':content[:1200],'source_excerpt':content[:1800],
+                    'search_text':'\n'.join((str(doc.get('title') or ''),content)),
+                    'updated_at':str(doc.get('updated_at') or metadata.get('updated_at') or metadata.get('date') or ''),
+                    'fingerprint':hashlib.sha256(content.encode()).hexdigest(),
+                    'bound_narrative_ids':bound_ids,'is_unbound':not bound_ids})
         return materials
 
     def _narrative_seed_sort_key(self, item: dict[str, Any]) -> tuple[str, str, str]:
@@ -183,9 +204,61 @@ class NarrativeScout:
         return [self._hydrate_event_scout_material(item) for item in seeds]
 
     async def _scan_narrative_revision_inbox(self, *, include_external: bool=True, force_external: bool=False) -> dict[str, Any]:
-        """Create review hints only; never invoke Narrative Writer or publish a roll."""
+        """Route new material into Arcs and create review hints; never invoke Narrative Writer."""
         settings = self._narrative_revision_scan_settings(self.config)
         scan_timezone = settings['timezone']
+        from ...deployment import read_settings, task_model
+        nightly_enabled = bool(read_settings(self.settings.database)['features'].get('narrative_nightly_organize'))
+        configured_model = task_model(self.settings.database, 'narrative_scout')
+        scout_model = str((configured_model or {}).get('model') or '')
+        scout_base_url = str((configured_model or {}).get('base_url') or '')
+        scout_status = 'disabled'
+        inventory = (await self._active_narrative_material_inventory(exclude_covered_events=True)
+                     if include_external and nightly_enabled else [])
+        seeds = sorted((item for item in inventory if item.get('is_unbound')),
+                       key=self._narrative_seed_sort_key, reverse=True)[:int(settings['new_roll_scout_seed_limit'])]
+        fingerprint = hashlib.sha256(_json_lib.dumps([
+            (item['source_type'], item['source_id'], item.get('updated_at',''), item.get('fingerprint',''),
+             tuple(item.get('bound_narrative_ids') or []))
+            for item in sorted(inventory, key=lambda row:(row['source_type'],row['source_id']))
+        ], ensure_ascii=False, separators=(',',':')).encode()).hexdigest()
+        previous_scan = self.inbox.scan_metadata()
+        arc_changes = []
+        if include_external and nightly_enabled:
+            if not seeds:
+                scout_status = 'no_materials'
+            elif fingerprint == previous_scan.get('external_input_sha256') and not force_external:
+                scout_status = 'unchanged'
+            elif not configured_model:
+                scout_status = 'unavailable'
+            else:
+                client = None
+                try:
+                    from ...model_runtime import TaskClient
+                    client = TaskClient(self.settings.database, 'narrative_scout')
+                    hydrated = self._hydrate_scout_seeds(seeds)
+                    hydrated_by_key = {f"{item['source_type']}:{item['source_id']}":item for item in hydrated}
+                    search_inventory = [hydrated_by_key.get(f"{item['source_type']}:{item['source_id']}",item) for item in inventory]
+                    corridors = build_keyword_corridors(search_inventory, list(hydrated_by_key),
+                        max_keywords=int(settings['new_roll_scout_keywords_per_seed']),
+                        max_candidates_per_seed=int(settings['new_roll_scout_candidates_per_seed']))
+                    corridors = self._hydrate_scout_corridors(corridors)
+                    existing_rolls = [{key:roll.get(key) for key in
+                        ('narrative_id','title','query_cues','current_status_cue')}
+                        for roll in self.rolls._load()
+                        if roll.get('integrity_status') == 'ok' and roll.get('lifecycle') == 'active']
+                    candidates = await propose_new_roll_candidates(client=client, model=scout_model,
+                        corridors=corridors, role_rules=self.role_rules(),
+                        completion_options={'max_tokens':2600,'temperature':0},
+                        existing_candidates=[], existing_rolls=existing_rolls)
+                    arc_changes = self.apply_arc_candidates(candidates, model=scout_model)
+                    scout_status = 'ok' if corridors else 'no_keyword_matches'
+                except Exception as exc:
+                    scout_status = 'error'
+                    logger.warning('Automatic Arc scout failed / 自动 Arc 整理失败: %s', exc)
+                finally:
+                    if client is not None:
+                        await client.close()
         stale_created: list[dict[str, Any]] = []
         stale_narrative_ids: set[str] = set()
         checked_rolls = 0
@@ -207,51 +280,23 @@ class NarrativeScout:
                 stale_narrative_ids.add(narrative_id)
                 stale_created.extend(self.inbox.consider_stale_roll(narrative, latest_material=latest, material_count=len(sources)))
         stale_hints_removed = self.inbox.reconcile_stale_rolls(stale_narrative_ids)
-        scout_status = 'disabled'
-        scout_model = str(settings['new_roll_scout_model'])
-        scout_base_url = str(settings['new_roll_scout_base_url'])
-        scout_api_key_env = str(settings['new_roll_scout_api_key_env'])
-        candidate_created: list[dict[str, Any]] = []
-        inventory = await self._active_narrative_material_inventory()
-        bound_new_roll_hints_removed = self.inbox.reconcile_bound_new_roll_materials(bound_event_ids={str(item.get('source_id') or '') for item in inventory if str(item.get('source_type') or '') == 'event' and list(item.get('bound_narrative_ids') or [])}, bound_scene_ids={str(item.get('source_id') or '') for item in inventory if str(item.get('source_type') or '') == 'scene' and list(item.get('bound_narrative_ids') or [])})
-        seeds = sorted((item for item in inventory if bool(item.get('is_unbound'))), key=self._narrative_seed_sort_key, reverse=True)[:int(settings['new_roll_scout_seed_limit'])]
-        scout_input_fingerprint = hashlib.sha256(_json_lib.dumps([(str(item.get('source_type') or ''), str(item.get('source_id') or ''), str(item.get('updated_at') or ''), str(item.get('fingerprint') or ''), tuple(item.get('bound_narrative_ids') or [])) for item in sorted(inventory, key=lambda row: (str(row.get('source_type') or ''), str(row.get('source_id') or '')))], ensure_ascii=False, separators=(',', ':')).encode('utf-8')).hexdigest()
-        previous_scan = self.inbox.scan_metadata()
-        from ...deployment import task_model
-        configured_model = task_model(self.settings.database, 'narrative_scout') if hasattr(self, 'settings') else None
-        if include_external and settings['new_roll_scout_enabled']:
-            if not seeds:
-                scout_status = 'no_materials'
-            elif scout_input_fingerprint == previous_scan.get('external_input_sha256') and (not force_external):
-                scout_status = 'unchanged'
-            elif not configured_model and (not scout_base_url or not scout_model or (not scout_api_key_env) or (not os.environ.get(scout_api_key_env))):
-                scout_status = 'unavailable'
-            else:
-                client = None
-                try:
-                    if configured_model:
-                        from ...model_runtime import TaskClient
-                        client = TaskClient(self.settings.database, 'narrative_scout')
-                    else:
-                        from openai import AsyncOpenAI
-                        client = AsyncOpenAI(api_key=os.environ[scout_api_key_env], base_url=scout_base_url, timeout=180.0, max_retries=0)
-                    role_rules = self.role_rules()
-                    hydrated_seeds = self._hydrate_scout_seeds(seeds)
-                    hydrated_by_key = {f"{str(item.get('source_type') or '')}:{str(item.get('source_id') or '')}": item for item in hydrated_seeds}
-                    search_inventory = [hydrated_by_key.get(f"{str(item.get('source_type') or '')}:{str(item.get('source_id') or '')}", item) for item in inventory]
-                    corridors = build_keyword_corridors(search_inventory, list(hydrated_by_key), max_keywords=int(settings['new_roll_scout_keywords_per_seed']), max_candidates_per_seed=int(settings['new_roll_scout_candidates_per_seed']))
-                    hydrated_corridors = self._hydrate_scout_corridors(corridors)
-                    existing_candidates = self.inbox.candidate_contexts(hydrated_corridors)
-                    candidates = await propose_new_roll_candidates(client=client, model=scout_model, corridors=hydrated_corridors, role_rules=role_rules, completion_options={'max_tokens': 2600, 'temperature': 0.0}, existing_candidates=existing_candidates)
-                    candidate_created = self.inbox.consider_new_roll_candidates(candidates, model=scout_model)
-                    scout_status = 'ok' if corridors else 'no_keyword_matches'
-                except Exception as exc:
-                    scout_status = 'error'
-                    logger.warning('New Narrative Roll scout failed / 新叙事卷候选扫描失败: %s', exc)
-                finally:
-                    if client is not None:
-                        await client.close()
-        recorded_fingerprint = scout_input_fingerprint if scout_status in {'ok', 'unchanged', 'no_materials', 'no_keyword_matches'} else str(previous_scan.get('external_input_sha256') or '')
-        result = {'status': 'ok', 'checked_rolls': checked_rolls, 'stale_roll_hints_created': len(stale_created), 'stale_roll_hints_removed': len(stale_hints_removed), 'bound_new_roll_hints_removed': len(bound_new_roll_hints_removed), 'active_materials_searched': len(inventory), 'unbound_material_seeds_checked': len(seeds), 'unbound_events_checked': sum((1 for item in seeds if str(item.get('source_type') or '') == 'event')), 'unbound_scenes_checked': sum((1 for item in seeds if str(item.get('source_type') or '') == 'scene')), 'new_roll_hints_created': sum(item.get('change') == 'created' for item in candidate_created), 'new_roll_hints_accumulated': sum(item.get('change') == 'accumulated' for item in candidate_created), 'external_scout_status': scout_status, 'external_model': scout_model if scout_status not in {'disabled', 'unavailable'} else '', 'external_base_url': scout_base_url if scout_status not in {'disabled', 'unavailable'} else '', 'external_search_mode': 'host_literal_keywords_then_active_exact_search_then_terra_review', 'external_input_sha256': recorded_fingerprint, 'writes_performed': [{'type': 'narrative_revision_hint', 'proposal_id': item.get('proposal_id'), 'proposal_kind': item.get('proposal_kind')} for item in [*stale_created, *candidate_created]] + [{'type': 'narrative_revision_hint_removed', 'proposal_id': proposal_id, 'proposal_kind': 'existing_roll_update'} for proposal_id in stale_hints_removed], 'narrative_writes_performed': []}
+        recorded = fingerprint if scout_status in {'ok','unchanged','no_materials','no_keyword_matches'} else str(previous_scan.get('external_input_sha256') or '')
+        result = {'status':'ok','checked_rolls':checked_rolls,
+            'nightly_arc_organize_enabled':nightly_enabled,
+            'stale_roll_hints_created':len(stale_created),'stale_roll_hints_removed':len(stale_hints_removed),
+            'active_materials_searched':len(inventory),'unbound_material_seeds_checked':len(seeds),
+            'unbound_events_checked':sum(item['source_type']=='event' for item in seeds),
+            'unbound_scenes_checked':sum(item['source_type']=='scene' for item in seeds),
+            'unbound_diaries_checked':sum(item['source_type']=='diary' for item in seeds),
+            'existing_arcs_updated':sum(item['type']=='existing_arc_materials' for item in arc_changes),
+            'new_collecting_arcs_created':sum(item['type']=='new_collecting_arc' for item in arc_changes),
+            'external_scout_status':scout_status,
+            'external_model':scout_model if scout_status not in {'disabled','unavailable'} else '',
+            'external_base_url':scout_base_url if scout_status not in {'disabled','unavailable'} else '',
+            'external_search_mode':'new_materials_to_existing_or_collecting_arc',
+            'external_input_sha256':recorded,
+            'writes_performed':[{'type':'narrative_revision_hint','proposal_id':item.get('proposal_id'),'proposal_kind':item.get('proposal_kind')} for item in stale_created]
+                + [{'type':'narrative_revision_hint_removed','proposal_id':proposal_id,'proposal_kind':'existing_roll_update'} for proposal_id in stale_hints_removed],
+            'narrative_writes_performed':arc_changes}
         self.inbox.record_scan(result)
         return result

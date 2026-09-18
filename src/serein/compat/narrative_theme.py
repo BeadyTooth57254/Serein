@@ -8,7 +8,6 @@ import httpx
 from uuid import UUID
 
 from .scout import Scout
-from ..core.reader import Reader
 from ..recall.index import Search, tokens
 from ..adapters.embedding import EmbeddingClient
 from ..deployment import task_model
@@ -93,16 +92,6 @@ async def discover(settings, theme, materialize):
                  if isinstance(term, str) and 1 < len(term.strip()) <= 30][:8]
         terms = list(dict.fromkeys([theme.lower(), *terms, *tokens(theme)]))[:32]
         inventory = await scout._active_narrative_material_inventory()
-        # Reader enforces current diary deletion, visibility and unlock state.
-        with Reader(settings.database) as reader:
-            for key, in reader.store.conn.execute("SELECT id FROM diary_entries WHERE kind='diary'").fetchall():
-                result = reader.read(str(key), kind='diary', with_evidence=False)
-                if not result['readable']:
-                    continue
-                doc = result['document']
-                inventory.append({'source_type': 'diary', 'source_id': str(key),
-                    'title': doc['title'] or '', 'date': doc['metadata'].get('date', ''),
-                    'search_text': (doc['title'] or '') + '\n' + doc['body_md']})
         by_id = {(item['source_type'], str(item['source_id'])): item for item in inventory}
         ranks = {}
         lexical = sorted(inventory, key=lambda item: (-sum(

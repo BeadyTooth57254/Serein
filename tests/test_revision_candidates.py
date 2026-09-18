@@ -176,14 +176,19 @@ def test_candidate_material_titles_pagination_and_current_read_access(settings):
         assert client.get(path, params={'limit':101}).status_code == 422
 
 
-def test_scan_retires_model_candidates_without_calling_a_model(settings, monkeypatch):
+def test_scan_uses_configured_theme_model_to_create_blank_collecting_arc(settings, monkeypatch):
     from fastapi.testclient import TestClient
     from serein.api.http import create_app
     from serein.deployment import save_settings
 
-    seed(settings, count=2)
+    with Store(settings.database) as store, store.transaction():
+        store.create('scene_0', 'scene', 'Serein milestone one', 'SereinProject reached its first milestone.',
+                     metadata={'object_kind':'scene'})
+        store.create('scene_1', 'scene', 'Serein milestone two', 'SereinProject reached its second milestone.',
+                     metadata={'object_kind':'scene'})
     save_settings(settings.database, {'models': [{'id': 'scout', 'model': 'synthetic-scout',
-        'base_url': 'http://127.0.0.1:9/v1'}], 'assignments': {'narrative_scout': 'scout'}})
+        'base_url': 'http://127.0.0.1:9/v1'}], 'assignments': {'narrative_scout': 'scout'},
+        'features': {'narrative_nightly_organize': True}})
     with narrative_transaction(settings.database, write=True) as rolls:
         RevisionInbox(rolls.store)._save({'items': [
             {'proposal_id': 'old-model-candidate', 'proposal_kind': 'new_roll_candidate',
@@ -192,19 +197,61 @@ def test_scan_retires_model_candidates_without_calling_a_model(settings, monkeyp
              'source_type': 'scene', 'source_id': 'scene_1'},
         ]})
 
-    async def unexpected(*args, **kwargs):
-        pytest.fail('Revision scan must not call the configured theme model')
-    monkeypatch.setattr('serein.model_runtime.complete', unexpected)
+    called = []
+    async def routed(model, payload, **kwargs):
+        called.append(payload)
+        return {'choices':[{'message':{'content':json.dumps({'candidates':[{
+            'seed_source_type':'scene','seed_source_id':'scene_0','target_narrative_id':'',
+            'title':'Serein 里程碑','reason':'两份材料记录同一项目的持续推进','confidence':'high',
+            'materials':[{'source_type':'scene','source_id':'scene_0'},
+                         {'source_type':'scene','source_id':'scene_1'}]}]})}}]}
+    monkeypatch.setattr('serein.model_runtime.complete', routed)
 
     with TestClient(create_app(settings, token='synthetic', live=True),
                     headers={'Authorization': 'Bearer synthetic'}) as client:
         result = client.post('/api/narrative-revision-inbox/scan', json={}).json()
-        assert result['status'] == 'ok' and result['model_candidates_retired'] == 1
+        assert result['status'] == 'ok' and result['new_collecting_arcs_created'] == 1
+        assert result['external_model'] == 'synthetic-scout' and len(called) == 1
         assert result['checked_rolls'] == 0
+        created = result['narrative_writes_performed'][0]
+        arc = client.get('/api/narrative-rolls', params={'narrative_id':created['narrative_id']}).json()
+        assert arc['publication_status'] == 'collecting' and arc['body'] == ''
         visible = client.get('/api/narrative-revision-inbox').json()['items']
         assert [item['proposal_id'] for item in visible] == ['old-program-hint']
     with narrative_transaction(settings.database) as rolls:
         old = next(item for item in RevisionInbox(rolls.store)._load()['items']
                    if item['proposal_id'] == 'old-model-candidate')
-        assert old['status'] == 'dismissed'
-        assert old['resolution'] == 'automatic_candidate_retired'
+        assert old['status'] == 'pending'
+
+
+def test_scan_with_no_new_materials_does_not_call_configured_model(settings, monkeypatch):
+    from serein.compat.scout import Scout
+    from serein.deployment import save_settings
+
+    save_settings(settings.database, {'models': [{'id':'scout','model':'synthetic-scout',
+        'base_url':'http://127.0.0.1:9/v1'}], 'assignments':{'narrative_scout':'scout'},
+        'features':{'narrative_nightly_organize':True}})
+    async def unexpected(*args, **kwargs):
+        pytest.fail('No materials must mean no model request')
+    monkeypatch.setattr('serein.model_runtime.complete', unexpected)
+    result = asyncio.run(Scout(settings)._scan_narrative_revision_inbox())
+    assert result['external_scout_status'] == 'no_materials'
+    assert result['narrative_writes_performed'] == []
+
+
+def test_nightly_arc_switch_off_skips_new_materials_and_model(settings, monkeypatch):
+    from serein.compat.scout import Scout
+    from serein.deployment import save_settings
+
+    with Store(settings.database) as store, store.transaction():
+        store.create('scene_new', 'scene', 'New material', 'A new continuing line.',
+                     metadata={'object_kind':'scene'})
+    save_settings(settings.database, {'models':[{'id':'scout','model':'synthetic-scout',
+        'base_url':'http://127.0.0.1:9/v1'}], 'assignments':{'narrative_scout':'scout'}})
+    async def unexpected(*args, **kwargs):
+        pytest.fail('Disabled nightly Arc organization must not call a model')
+    monkeypatch.setattr('serein.model_runtime.complete', unexpected)
+    result = asyncio.run(Scout(settings)._scan_narrative_revision_inbox())
+    assert result['nightly_arc_organize_enabled'] is False
+    assert result['external_scout_status'] == 'disabled'
+    assert result['narrative_writes_performed'] == []

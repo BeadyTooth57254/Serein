@@ -108,7 +108,7 @@ export function BasementRevisionInbox() {
         <div>
           <span className="basement-kicker">来源发生变化之后</span>
           <h2 id="revision-inbox-title">修订箱</h2>
-          <p>凌晨四点用程序检查已有 Arc 的关联材料；晚于上次发布的变化会在这里提醒。新主题请到叙事卷手动找材料。</p>
+          <p>凌晨四点后批量整理新增的 Event、Scene 与日记：续接已有 Arc，或建立没有正文的新 Arc。</p>
         </div>
         <div className="basement-live-note">
           <i aria-hidden="true" />
@@ -118,7 +118,7 @@ export function BasementRevisionInbox() {
 
       {scan.last_scan_at && (
         <p className="basement-workbench__scan-note">
-          上次扫描 {scan.last_scan_at} · 程序检查 · 正文写入 0
+          上次扫描 {scan.last_scan_at} · {scan.external_model || "未调用模型"} · 正文写入 0
         </p>
       )}
 
@@ -144,7 +144,7 @@ export function BasementRevisionInbox() {
         <div className="basement-empty-state">
           <Archive size={22} weight="light" aria-hidden="true" />
           <span>{filter === "pending" ? "现在没有待判断的修订" : `没有${statusLabels[filter]}记录`}</span>
-          <p>已有 Arc 的关联材料在上次发布后发生变化，才会来到这里。</p>
+          <p>当前没有需要重写正文的材料变化；自动整理不会代替你书写叙事卷。</p>
         </div>
       )}
 
