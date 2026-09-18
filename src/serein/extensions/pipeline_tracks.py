@@ -76,8 +76,17 @@ def update_cards(cards, assignments, updates, messages, scope):
     return list(current.values())
 
 
-def persist(conn, cards, scope):
+def persist(conn, cards, scope, *, preserve_newer=False):
     for card in cards:
+        if preserve_newer:
+            row = conn.execute('SELECT card_json FROM pipeline_tracks WHERE id=?', (card['track_id'],)).fetchone()
+            if row:
+                previous = [key for key in json.loads(row[0]).get('recent_source_message_ids', []) if type(key) is int]
+                incoming = [key for key in card.get('recent_source_message_ids', []) if type(key) is int]
+                if previous and (not incoming or max(incoming) < max(previous)):
+                    continue
+        # Unused parked cards still belong to the last window that referenced
+        # them. Saving a different batch must not move their continuation scope.
         conn.execute('INSERT INTO pipeline_tracks VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET '
                      'scope=excluded.scope,card_json=excluded.card_json',
                      (card['track_id'], card.get('last_session_id', scope), encode(card)))

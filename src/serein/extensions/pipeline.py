@@ -126,15 +126,55 @@ def new_batch(database,include_recent,clock=None):
 
 def route_result(data,output):
     if output.get('_public_normalized'):
+        validate_routing_result(data,output)
         return output['assignments'],output['tracks'],output.get('next_track_ordinal',track_state.next_ordinal(data['scope'],output['tracks']))
     return normalize_event_track_message_output(output,data['routing_messages'],data['tracks'],session_id=data['scope'],next_track_ordinal=data.get('next_track_ordinal',track_state.next_ordinal(data['scope'],data['tracks'])))
 
 
 def _card_is_complete(card):
     return (isinstance(card,dict) and isinstance(card.get('track_id'),str) and card['track_id']
-            and all(isinstance(card.get(key),str) and card[key].strip() for key in ('subject','throughline','status'))
+            and all(isinstance(card.get(key),str) and 0<len(card[key].strip())<=limit
+                    for key,limit in (('subject',160),('throughline',600)))
             and card.get('status') in ('active','parked')
-            and str(card.get('event_policy') or 'default') in ('default','rolling_engineering'))
+            and card.get('event_policy','default') in ('default','rolling_engineering'))
+
+
+def _assignment_tracks(data,assignments):
+    expected=[item['id'] for item in data['routing_messages']]
+    fields={'source_message_id','primary_track_id','context_track_ids','routing_role'}
+    if (not isinstance(assignments,list) or len(assignments)!=len(expected)
+            or len(set(expected))!=len(expected)):
+        raise RoutingRecoveryError('routes do not exact-cover frozen routing messages')
+    used=[]
+    for key,item in zip(expected,assignments):
+        if (not isinstance(item,dict) or set(item)!=fields
+                or type(item.get('source_message_id')) is not int or item['source_message_id']!=key):
+            raise RoutingRecoveryError(f'route does not match frozen message {key}')
+        primary=item['primary_track_id'];context=item['context_track_ids']
+        if (not isinstance(primary,str) or not primary or not isinstance(context,list)
+                or any(not isinstance(ref,str) or not ref or ref==primary for ref in context)
+                or len(set(context))!=len(context)
+                or item['routing_role'] not in {'origin','primary_activity','landing','bridge','routine'}
+                or bool(context)!=(item['routing_role']=='bridge')):
+            raise RoutingRecoveryError(f'invalid Track reference or bridge relationship for message {key}')
+        used.extend([primary,*context])
+    return list(dict.fromkeys(used))
+
+
+def validate_routing_result(data,routed):
+    if not isinstance(routed,dict) or routed.get('_public_normalized') is not True:
+        raise RoutingRecoveryError('invalid normalized routing snapshot')
+    used=_assignment_tracks(data,routed.get('assignments'))
+    tracks=routed.get('tracks');updates=routed.get('track_state_updates')
+    if (not isinstance(tracks,list) or not all(_card_is_complete(card) for card in tracks)
+            or len({card['track_id'] for card in tracks})!=len(tracks)
+            or {card['track_id'] for card in tracks}!=set(used)
+            or not isinstance(updates,list) or not all(_card_is_complete(card) for card in updates)
+            or len({card['track_id'] for card in updates})!=len(updates)
+            or not set(used)<={card['track_id'] for card in updates}
+            or type(routed.get('next_track_ordinal')) is not int or routed['next_track_ordinal']<1):
+        raise RoutingRecoveryError('routing snapshot has incomplete Track cards or ordinal')
+    return routed
 
 
 def cached_route_result(database,data):
@@ -143,88 +183,150 @@ def cached_route_result(database,data):
     with Store(database,read_only=True) as store:
         rows=[store.conn.execute('SELECT route_json FROM pipeline_routes WHERE raw_id=?',(key,)).fetchone() for key in expected]
         if not rows or not all(rows):return None
-        assignments=[json.loads(row[0]) for row in rows]
-        if [item.get('source_message_id') for item in assignments]!=expected:
-            raise RoutingRecoveryError('cached routes do not exact-cover frozen routing messages')
-        used=[]
-        for item in assignments:
-            primary=item.get('primary_track_id');context=item.get('context_track_ids')
-            if (not isinstance(primary,str) or not primary or not isinstance(context,list)
-                    or any(not isinstance(key,str) or not key or key==primary for key in context)
-                    or item.get('routing_role') not in {'origin','primary_activity','landing','bridge','routine'}
-                    or bool(context)!=(item.get('routing_role')=='bridge')):
-                raise RoutingRecoveryError('cached route has an invalid Track reference or bridge relationship')
-            used.extend([primary,*context])
-        used=list(dict.fromkeys(used))
+        try:assignments=[json.loads(row[0]) for row in rows]
+        except (TypeError,ValueError) as error:
+            raise RoutingRecoveryError('cached route JSON is invalid') from error
+        used=_assignment_tracks(data,assignments)
         cards={card['track_id']:card for card in data['tracks'] if _card_is_complete(card)}
         missing=[key for key in used if key not in cards]
         if missing:
             placeholders=','.join('?' for _ in missing)
             for row in store.conn.execute('SELECT id,scope,card_json FROM pipeline_tracks WHERE id IN ('+placeholders+')',missing):
-                card=json.loads(row['card_json'])
+                try:card=json.loads(row['card_json'])
+                except (TypeError,ValueError) as error:
+                    raise RoutingRecoveryError('invalid cached Track card: '+row['id']) from error
                 # A cache-only card must have been materialized in this frozen
                 # session. Frozen cards already carry the allowed previous-window
                 # boundary, so never widen that boundary by searching all cards.
                 if row['scope']==data['scope'] and _card_is_complete(card) and card['track_id']==row['id']:
-                    cards[row['id']]=card
+                    # Do not import future turn text into an older frozen batch.
+                    anchors=card.get('recent_source_message_ids',[])
+                    if not isinstance(anchors,list) or any(type(key) is not int for key in anchors):
+                        raise RoutingRecoveryError('invalid cached Track anchors: '+row['id'])
+                    if anchors and max(anchors)>max(expected):
+                        raise RoutingRecoveryError('cached Track is newer than this frozen batch: '+row['id'])
+                    visible={m['id']:m for m in [*data.get('recent',[]),*data['routing_messages']]}
+                    bounded=[visible[key] for key in anchors if key in visible]
+                    cards[row['id']]={**card,'recent_source_message_ids':[m['id'] for m in bounded],
+                                      'recent_turns':latest.transcript_payload(bounded)}
         unresolved=[key for key in used if key not in cards]
         if unresolved:
             raise RoutingRecoveryError('cached route references Track(s) without verifiable frozen material: '+','.join(unresolved))
     return {'assignments':assignments,'tracks':[cards[key] for key in used],
             'track_state_updates':[cards[key] for key in used],
-            'next_track_ordinal':data.get('next_track_ordinal',track_state.next_ordinal(data['scope'],data['tracks'])),
+            'next_track_ordinal':max(data.get('next_track_ordinal',1),track_state.next_ordinal(data['scope'],list(cards.values()))),
             '_public_normalized':True}
 
 
 def _component_signature(components):
-    return [(
-        tuple(component.get('track_ids',[])),
-        tuple((unit.get('unit_root_message_id'),unit.get('track_id')) for unit in component.get('memberships',[])),
-    ) for component in components]
+    # Group/order changes must not hide changed ownership or bridge endpoints.
+    # Keep duplicates visible; only unordered collection order is normalized.
+    return tuple(sorted(encode({
+        'track_ids':sorted(component.get('track_ids',[])),
+        'messages':sorted(m['id'] for m in component.get('messages',[])),
+        'parked':sorted(component.get('parked_context_source_ids',[])),
+        'memberships':sorted(encode({
+            'root':unit.get('unit_root_message_id'),
+            'sources':sorted(unit.get('source_message_ids',[])),
+            'track':unit.get('track_id'),'session':unit.get('session_id'),
+            'role':unit.get('routing_role'),
+        }) for unit in component.get('memberships',[])),
+        'edges':sorted(encode(edge) for edge in component.get('context_edges',[])),
+    }) for component in components))
 
 
 def save_routing_snapshot(database,batch,data,routed):
     """Persist the exact interpretation before any downstream model stage runs."""
-    data['routing_result']=routed
-    fresh=components(database,data,routed)
+    validate_routing_result(data,routed)
+    fresh=components(database,data,routed,include_materials='components' not in data)
     if 'components' in data and _component_signature(data['components'])!=_component_signature(fresh):
         raise RoutingRecoveryError('frozen components disagree with recovered routing result')
+    data['routing_result']=routed
     data.setdefault('components',fresh)
     with Store(database) as store,store.transaction(immediate=True):
-        for card in routed.get('track_state_updates') or []:
-            existing=store.conn.execute('SELECT card_json FROM pipeline_tracks WHERE id=?',(card['track_id'],)).fetchone()
-            if not existing:
-                store.conn.execute('INSERT INTO pipeline_tracks VALUES (?,?,?)',(card['track_id'],data['scope'],encode(card)))
-                continue
-            prior=json.loads(existing['card_json'])
-            previous=[key for key in prior.get('recent_source_message_ids',[]) if isinstance(key,int)]
-            incoming=[key for key in card.get('recent_source_message_ids',[]) if isinstance(key,int)]
-            # A later continuation owns the newer anchor.  This batch still
-            # keeps its frozen card in routing_result for component rendering.
-            if not previous or (incoming and max(incoming)>=max(previous)):
-                store.conn.execute('UPDATE pipeline_tracks SET scope=?,card_json=? WHERE id=?',(data['scope'],encode(card),card['track_id']))
+        track_state.persist(store.conn,routed['track_state_updates'],data['scope'],preserve_newer=True)
+        if batch['status']=='needs_repair':
+            data['last_routing_repair']={'checked_at':now(),'previous_result':json.loads(batch['result_json'])}
+            store.conn.execute("UPDATE pipeline_batches SET status='pending',result_json=NULL WHERE id=?",(batch['id'],))
         store.conn.execute('UPDATE pipeline_batches SET input_json=? WHERE id=?',(encode(data),batch['id']))
+    batch['input_json']=encode(data)
     return data
 
 
 def mark_needs_repair(database,batch,error):
-    detail={'status':'needs_repair','batch_id':batch['id'],'reason':str(error)}
+    detail={'status':'needs_repair','batch_id':batch['id'],'reason':str(error),
+            'note':'归线材料需要修复；原话和已完成步骤保留。修复后点击“重新校验并继续”。'}
     with Store(database) as store,store.transaction(immediate=True):
         store.conn.execute("UPDATE pipeline_batches SET status='needs_repair',result_json=? WHERE id=?",(encode(detail),batch['id']))
     return detail
 
 
+def router_jobs(database,batch):
+    with Store(database,read_only=True) as store:
+        rows=[dict(row) for row in store.conn.execute(
+            "SELECT * FROM pipeline_jobs WHERE batch_id=? AND role LIKE 'track_router%' ORDER BY rowid",(batch['id'],))]
+    indexed=[]
+    for row in rows:
+        match=re.fullmatch(r'track_router:([0-9]+)',row['role'])
+        if not match or row['id']!=batch['id']+':'+row['role']:
+            raise RoutingRecoveryError('unrecognized frozen Router job: '+row['id'])
+        indexed.append((int(match[1]),row))
+    indexed.sort(key=lambda item:item[0])
+    if [index for index,_ in indexed]!=list(range(len(indexed))):
+        raise RoutingRecoveryError('frozen Router jobs are not a contiguous prefix')
+    return [row for _,row in indexed]
+
+
+def _router_prefix(data,request,cursor):
+    messages=request.get('messages')
+    if not isinstance(messages,list) or not messages or not all(isinstance(m,dict) for m in messages):
+        raise RoutingRecoveryError('frozen Router request has no valid message prefix')
+    expected=data['routing_messages'][cursor:cursor+len(messages)]
+    keys=('id','source','source_event_id','original_session_id','session_id','role','content')
+    project=lambda rows:[tuple(m.get(key) for key in keys) for m in rows]
+    if project(messages)!=project(expected):
+        raise RoutingRecoveryError('frozen Router request disagrees with batch message order/content')
+    if (request.get('role')!='track_router' or request.get('contract')!=data.get('contract')
+            or not isinstance(request.get('active_tracks'),list)
+            or type(request.get('next_track_ordinal')) is not int or request['next_track_ordinal']<1):
+        raise RoutingRecoveryError('invalid frozen Router request contract/cards/ordinal')
+    return messages
+
+
 async def route_batch(database,batch,data,runner):
-    chunks=blocks(data['routing_messages'],read_settings(database)['pipeline']['max_input_chars'])
-    cards=list(data['tracks']);assignments=[];ordinal=data.get('next_track_ordinal',track_state.next_ordinal(data['scope'],cards));prior=list(data['recent'])
-    for index,block in enumerate(chunks):
-        bounded={**data,'routing_messages':block,'tracks':track_state.parked(cards),'next_track_ordinal':ordinal,'recent':prior[-6:]}
-        prompt_batch={**batch,'input_json':encode(bounded)}
-        output=await job(database,batch,request_for(database,prompt_batch,'track_router'),f'track_router:{index}',runner)
-        routed,updates,ordinal=normalize_event_track_message_output(output,block,cards,session_id=data['scope'],next_track_ordinal=ordinal)
+    # Replay each saved job against its own request, not today's chunking/cards.
+    # Even an unfinished request reserves its input; global routes cannot replace it.
+    frozen=router_jobs(database,batch)
+    cards=list(data['tracks']);assignments=[]
+    ordinal=data.get('next_track_ordinal',track_state.next_ordinal(data['scope'],cards))
+    prior=list(data['recent']);cursor=0
+    for index,row in enumerate(frozen):
+        try:request=json.loads(row['request_json'])
+        except (TypeError,ValueError) as error:
+            raise RoutingRecoveryError('invalid frozen Router request JSON: '+row['id']) from error
+        if not isinstance(request,dict):raise RoutingRecoveryError('invalid frozen Router request: '+row['id'])
+        block=_router_prefix(data,request,cursor)
+        output=await job(database,batch,request,row['role'],runner)
+        try:
+            routed,updates,ordinal=normalize_event_track_message_output(output,block,request['active_tracks'],
+                session_id=data['scope'],next_track_ordinal=request['next_track_ordinal'])
+        except ValueError as error:
+            raise RoutingRecoveryError('cannot restore accepted Router job '+row['id']+': '+str(error)) from error
         with latest.identity_scope(identity(database)):
             cards=track_state.update_cards(cards,routed,updates,block,data['scope'])
-        assignments.extend(routed);prior.extend(block)
+        assignments.extend(routed);prior.extend(block);cursor+=len(block)
+    max_chars=data.get('input_policy',{}).get('max_input_chars',read_settings(database)['pipeline']['max_input_chars'])
+    for index,block in enumerate(blocks(data['routing_messages'][cursor:],max_chars),len(frozen)):
+        bounded={**data,'routing_messages':block,'tracks':track_state.parked(cards),'next_track_ordinal':ordinal,'recent':prior[-6:]}
+        prompt_batch={**batch,'input_json':encode(bounded)}
+        request=request_for(database,prompt_batch,'track_router')
+        output=await job(database,batch,request,f'track_router:{index}',runner)
+        block=_router_prefix(data,request,cursor)
+        routed,updates,ordinal=normalize_event_track_message_output(output,block,request['active_tracks'],
+            session_id=data['scope'],next_track_ordinal=request['next_track_ordinal'])
+        with latest.identity_scope(identity(database)):
+            cards=track_state.update_cards(cards,routed,updates,block,data['scope'])
+        assignments.extend(routed);prior.extend(block);cursor+=len(block)
     used={t for a in assignments for t in [a['primary_track_id'],*a['context_track_ids']]}
     return {'assignments':assignments,'tracks':[t for t in cards if t['track_id'] in used],
             'track_state_updates':cards,'next_track_ordinal':ordinal,'_public_normalized':True}
@@ -252,7 +354,7 @@ def candidates(database,track_ids):
     return result
 
 
-def components(database,data,routed):
+def components(database,data,routed,*,include_materials=True):
     assignments,tracks,_=route_result(data,routed)
     memberships,edges=routing_units(data['routing_messages'],assignments)
     by_id={row['id']:row for row in data['routing_messages']};stable_ids={m['id'] for m in data['messages']}
@@ -272,7 +374,7 @@ def components(database,data,routed):
         own=[a for a in assignments if a['primary_track_id'] in group]
         stable=[by_id[a['source_message_id']] for a in own if a['source_message_id'] in stable_ids]
         if not stable:continue
-        bases=candidates(database,group)
+        bases=candidates(database,group) if include_materials else []
         context={a['source_message_id']:by_id[a['source_message_id']] for a in own}
         for base in bases:context.update({m['id']:m for m in base['originals']})
         result.append({'component_id':'+'.join(sorted(group)),'track_ids':sorted(group),'track_cards':[t for t in tracks if t['track_id'] in group],
@@ -560,14 +662,14 @@ def settle(database,batch,data,routed,plans):
     return result
 
 
-async def advance(database,*,include_recent=False,runner=None):
+async def advance(database,*,include_recent=False,runner=None,retry_repair=False):
     from ..work_tasks import execute
-    return await execute(database,'pipeline',lambda:_advance(database,include_recent=include_recent,runner=runner))
+    return await execute(database,'pipeline',lambda:_advance(database,include_recent=include_recent,runner=runner,retry_repair=retry_repair))
 
 
-async def _advance(database,*,include_recent=False,runner=None):
+async def _advance(database,*,include_recent=False,runner=None,retry_repair=False):
     with execution(database):
-        return await _advance_frozen(database,include_recent=include_recent,runner=runner)
+        return await _advance_frozen(database,include_recent=include_recent,runner=runner,retry_repair=retry_repair)
 
 
 async def transcribe_component(database,batch,component,index,runner,*,key_prefix='image_transcription'):
@@ -597,19 +699,29 @@ async def transcribe_component(database,batch,component,index,runner,*,key_prefi
         raise
 
 
-async def _advance_frozen(database,*,include_recent=False,runner=None):
+async def _advance_frozen(database,*,include_recent=False,runner=None,retry_repair=False):
     initialize(database)
     batch=new_batch(database,include_recent)
     if not batch:return {'status':'current','note':'No stable dialogue units are ready.'}
     data=json.loads(batch['input_json']);plans=[]
-    if batch['status']=='needs_repair':
+    if batch['status']=='needs_repair' and not retry_repair:
         return json.loads(batch['result_json'])
     try:
         routed=data.get('routing_result')
         if routed is None:
-            routed=cached_route_result(database,data)
-            if routed is None:routed=await route_batch(database,batch,data,runner)
+            if router_jobs(database,batch):
+                routed=await route_batch(database,batch,data,runner)
+            else:
+                routed=cached_route_result(database,data)
+                if routed is None:routed=await route_batch(database,batch,data,runner)
             data=save_routing_snapshot(database,batch,data,routed)
+        else:
+            validate_routing_result(data,routed)
+            if batch['status']=='needs_repair':
+                data=save_routing_snapshot(database,batch,data,routed)
+            elif _component_signature(data.get('components',[]))!=_component_signature(
+                    components(database,data,routed,include_materials=False)):
+                raise RoutingRecoveryError('frozen components disagree with routing snapshot')
         for index,component in enumerate(data['components']):
             pretranscribed=await transcribe_component(database,batch,component,index,runner)
             request=request_for(database,batch,'event_curator',component=component,pretranscribed=pretranscribed)
@@ -651,9 +763,9 @@ async def _advance_frozen(database,*,include_recent=False,runner=None):
 
 
 def tools_for(settings):
-    async def pipeline_next(include_recent:bool=False)->dict:
+    async def pipeline_next(include_recent:bool=False,retry_repair:bool=False)->dict:
         """Advance Router -> Curator (with image transcription) -> Writer; return a frozen agent task if its model is blank."""
-        return await advance(settings.database,include_recent=include_recent)
+        return await advance(settings.database,include_recent=include_recent,retry_repair=retry_repair)
     def pipeline_submit(job_id:str,output:dict)->dict:
         """Submit a frozen role result. Curator owns boundaries; Writer never changes them."""
         return submit(settings.database,job_id,output)
@@ -690,7 +802,7 @@ async def _flush_routes_frozen(database):
         output=await route_batch(database,batch,data,None)
         assignments,updates,_=route_result(data,output)
         with Store(database) as store,store.transaction(immediate=True):
-            track_state.persist(store.conn,output['track_state_updates'],scope)
+            track_state.persist(store.conn,output['track_state_updates'],scope,preserve_newer=True)
             for a in assignments:store.conn.execute('INSERT OR REPLACE INTO pipeline_routes VALUES (?,?)',(a['source_message_id'],encode(a)))
             store.conn.execute("UPDATE pipeline_batches SET status='routed' WHERE id=?",(key,))
 
