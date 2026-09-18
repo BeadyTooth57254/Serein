@@ -43,7 +43,8 @@ def test_three_stage_image_chain_preserves_bytes_transcription_and_raw_sources(s
         if request['role']=='event_writer':
             assert isinstance(payload['messages'][1]['content'],str) and PNG not in payload['messages'][1]['content']
         result=check(request)
-        if request['role']=='event_writer' and seen.count('event_writer')==1:result['event_draft']='字'*1200
+        if request['role']=='event_writer' and seen.count('event_writer')==1:
+            result['self_review']['result_preserved']=False
         return {'choices':[{'message':{'content':json.dumps(result)}}]}
     monkeypatch.setattr('serein.model_runtime.complete',complete)
     result=asyncio.run(p.advance(settings.database,include_recent=True))

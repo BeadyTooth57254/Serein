@@ -24,8 +24,6 @@ def _identity_text(text):
 def materialize_agent_rules(role):
     return _identity_text((Path(__file__).parents[1]/'resources'/'agents'/role/'AGENTS.md').read_text('utf-8'))
 
-EVENT_BODY_MAX_CHARS = 450
-
 TRACK_EVENT_POLICIES = {'default', 'rolling_engineering'}
 EVENT_CURATOR_ACTIONS = {'create', 'extend', 'merge'}
 EVENT_CURATOR_BLOCKING_BASE_FLAGS = ('protected', 'manual', 'forked', 'blocked', 'scene_ref', 'narrative_ref')
@@ -580,10 +578,10 @@ def build_event_writer_prompt(day: str, title: str, messages: list[dict[str, Any
     reading_block = event_reading_block_payload(messages, context_messages, source_activity_roles=source_activity_roles)
     materialized_track_cards = materialized_track_cards_payload(track_cards)
     agent_rules = materialize_agent_rules('event_writer')
-    return f'[memory_phase: sol_event_writer]\n日期：{day}（Asia/Shanghai）\n{title_hint}\n正文上限：{EVENT_BODY_MAX_CHARS} 字，按去掉首尾空白后的字符数计算，包含标点和内部换行；不设最低字数。\n\n{agent_rules}\n\n证据充分时，输出以下 JSON，recallable 按规则判断 true 或 false：\n{{"evidence_sufficient":true,"recallable":true,"kept_details":["进入正文的辨识锚点"],"discarded_details":["owned 中彻底删除的旁支"],"self_review":{{"owned_evidence_sufficient":true,"owned_claims_only":true,"context_not_promoted":true,"referents_resolved":true,"identity_correct":true,"facts_and_causality_checked":true,"result_preserved":true}},"title":"短标题","event_draft":"自然连贯的第一人称 Event 正文"}}\n\n证据不足时，正文、标题和细节数组必须清空，输出：\n{{"evidence_sufficient":false,"recallable":false,"kept_details":[],"discarded_details":[],"self_review":{{"owned_evidence_sufficient":false,"owned_claims_only":true,"context_not_promoted":true,"referents_resolved":true,"identity_correct":true,"facts_and_causality_checked":true,"result_preserved":true}},"title":"","event_draft":""}}\n此时其余 self_review=true 表示没有生成越界或未核实的 Event 内容，不表示缺失的事实已获证实。\n{WRITER_ATTACHMENT_RULE}\n\n<event_reading_block_json>\n{json.dumps(reading_block, ensure_ascii=False)}\n</event_reading_block_json>\n\n<materialized_track_cards_json>\n{json.dumps(materialized_track_cards, ensure_ascii=False)}\n</materialized_track_cards_json>\n\n<track_context_events_json>\n{json.dumps(context_events, ensure_ascii=False)}\n</track_context_events_json>\n\n<previous_events_json>\n{json.dumps(previous, ensure_ascii=False)}\n</previous_events_json>\n'
+    return f'[memory_phase: sol_event_writer]\n日期：{day}（Asia/Shanghai）\n{title_hint}\n正文不设固定字数上限，也不设最低字数；按这段经历实际需要的篇幅写，写清就停。\n\n{agent_rules}\n\n证据充分时，输出以下 JSON，recallable 按规则判断 true 或 false：\n{{"evidence_sufficient":true,"recallable":true,"kept_details":["进入正文的辨识锚点"],"discarded_details":["owned 中彻底删除的旁支"],"self_review":{{"owned_evidence_sufficient":true,"owned_claims_only":true,"context_not_promoted":true,"referents_resolved":true,"identity_correct":true,"facts_and_causality_checked":true,"result_preserved":true}},"title":"短标题","event_draft":"自然连贯的第一人称 Event 正文"}}\n\n证据不足时，正文、标题和细节数组必须清空，输出：\n{{"evidence_sufficient":false,"recallable":false,"kept_details":[],"discarded_details":[],"self_review":{{"owned_evidence_sufficient":false,"owned_claims_only":true,"context_not_promoted":true,"referents_resolved":true,"identity_correct":true,"facts_and_causality_checked":true,"result_preserved":true}},"title":"","event_draft":""}}\n此时其余 self_review=true 表示没有生成越界或未核实的 Event 内容，不表示缺失的事实已获证实。\n{WRITER_ATTACHMENT_RULE}\n\n<event_reading_block_json>\n{json.dumps(reading_block, ensure_ascii=False)}\n</event_reading_block_json>\n\n<materialized_track_cards_json>\n{json.dumps(materialized_track_cards, ensure_ascii=False)}\n</materialized_track_cards_json>\n\n<track_context_events_json>\n{json.dumps(context_events, ensure_ascii=False)}\n</track_context_events_json>\n\n<previous_events_json>\n{json.dumps(previous, ensure_ascii=False)}\n</previous_events_json>\n'
 
 def build_event_writer_repair_prompt(original_prompt, failed_result, violations):
-    return original_prompt+f'\n请按原角色规则修正结构、长度和证据校验错误，保留同一 Event 的归属、人物、原话的比喻及不确定程度。正文最多 {EVENT_BODY_MAX_CHARS} 字，不设最低字数；超长时重新组织和压缩辅助解释、并列举例及重复说法，保住独特经过、关键因果、承诺条件和实际落点，不逐轮复述，不截断句子。不要新增事实、改变边界，或按词句数量机械改写文风。重新核对 self_review。\n'+json.dumps({'violations':violations,'failed_result':failed_result},ensure_ascii=False)
+    return original_prompt+f'\n请按原角色规则修正结构或证据校验错误，保留同一 Event 的归属、人物、原话的比喻及不确定程度。不要因正文长度删减真实转折、辨识细节、关键因果、承诺条件或实际落点；仍应删除不参与本段经历的旁支、逐轮复述、并列堆例和重复说法。正文不设固定字数上限或最低字数。不要新增事实、改变边界，或按词句数量机械改写文风。重新核对 self_review。\n'+json.dumps({'violations':violations,'failed_result':failed_result},ensure_ascii=False)
 
 
 def validate_event_writer_result(result: dict[str, Any]) -> list[str]:
@@ -615,9 +613,6 @@ def validate_event_writer_result(result: dict[str, Any]) -> list[str]:
         violations.append('标题为空')
     if not body:
         violations.append('正文为空')
-    if len(body) > EVENT_BODY_MAX_CHARS:
-        violations.append(f'正文超过 {EVENT_BODY_MAX_CHARS} 字上限：{len(body)} 字；请重新取舍压缩，不截断句子')
-        return violations
     if not 1 <= len(kept) <= 6:
         violations.append(f'kept_details 必须有 1–6 项：{len(kept)}')
     if not isinstance(result.get('discarded_details'), list):
