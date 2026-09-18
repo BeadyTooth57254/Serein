@@ -155,6 +155,7 @@ def test_pipeline_model_api_selection_uses_names_and_insufficient_writer_stays_p
         role=request['role'];calls.append(role)
         assert request['identity']['ai_name']=='Atlas'
         assert payload['messages'][1]['content']==request['prompt']
+        assert 'max_tokens' not in payload and 'max_completion_tokens' not in payload and 'max_output_tokens' not in payload
         result=output_for(role,request)
         if role=='event_writer':
             result.update(evidence_sufficient=False,recallable=False,title='',event_draft='',kept_details=[])
@@ -171,6 +172,7 @@ def test_persona_and_anti_retreat_independent_and_memo_ack(settings,monkeypatch)
     calls=[]
     async def complete(model,payload):
         calls.append(payload)
+        assert 'max_tokens' not in payload and 'max_completion_tokens' not in payload and 'max_output_tokens' not in payload
         return {'choices':[{'message':{'content':json.dumps({'signal':True,'kind':'conflict','confidence':.99})}}]}
     monkeypatch.setattr('serein.model_runtime.complete',complete)
     save_settings(settings.database,{'models':[{'id':'local','model':'synthetic','base_url':'http://127.0.0.1:9/v1'}],

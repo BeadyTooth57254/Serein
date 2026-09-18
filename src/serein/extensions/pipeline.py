@@ -575,9 +575,21 @@ async def job(database,batch,request,key,runner):
                 content=([{'type':'text','text':prompt}]+[{'type':'image_url','image_url':{'url':item['url']}} for item in request.get('images',[])]) if request.get('images') else prompt
                 response=await asyncio.wait_for(complete({**model,'request_timeout_seconds':policy['timeout_seconds']},
                     {'messages':[{'role':'system','content':request['rules']},{'role':'user','content':content}],
-                     'response_format':{'type':'json_object'},'max_tokens':8192}),timeout=policy['timeout_seconds']+20)
+                     'response_format':{'type':'json_object'}}),timeout=policy['timeout_seconds']+20)
                 received=True
-                raw=response['choices'][0]['message']['content']
+                choice=response['choices'][0]
+                raw=choice['message'].get('content') or ''
+                if not str(raw).strip():
+                    usage=response.get('usage') or {}
+                    details=usage.get('completion_tokens_details') or {}
+                    reasoning_tokens=details.get('reasoning_tokens')
+                    finish_reason=choice.get('finish_reason')
+                    suffix=''
+                    if finish_reason=='length':
+                        suffix='；上游报告输出预算耗尽'
+                        if reasoning_tokens is not None:
+                            suffix+=f'，其中思考使用 {reasoning_tokens} tokens'
+                    raise ValueError('模型未返回最终 JSON 内容'+suffix)
                 output=json.loads(raw)
                 validate(request,output)
                 record_attempt(database,identifier,raw)
