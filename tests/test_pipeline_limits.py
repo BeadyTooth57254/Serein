@@ -143,6 +143,58 @@ def test_oversized_pending_batch_reuses_accepted_router_output(settings):
         assert store.conn.execute('SELECT output_json FROM pipeline_jobs').fetchone()[0]==encode(output)
 
 
+def test_interrupted_batch_keeps_its_normalized_routes_after_daytime_flush(settings):
+    """A route written after freezing must not be reinterpreted against old cards."""
+    ingest(settings)
+    p.initialize(settings.database)
+    batch=p.new_batch(settings.database,True)
+    data=json.loads(batch['input_json'])
+    # The router succeeded before interruption.  Daytime routing then persists
+    # its assignment and created Track card, while the frozen batch itself is
+    # still in the old on-disk format without a route snapshot.
+    routed=asyncio.run(p.route_batch(settings.database,batch,data,synthetic_runner))
+    assignments,_,_=p.route_result(data,routed)
+    with Store(settings.database) as store:
+        from serein.extensions import pipeline_tracks as track_state
+        track_state.persist(store.conn,routed['track_state_updates'],data['scope'])
+        for assignment in assignments:
+            store.conn.execute('INSERT INTO pipeline_routes VALUES (?,?)',
+                               (assignment['source_message_id'],encode(assignment)))
+    calls=[]
+    async def runner(role,request):
+        calls.append(role)
+        return output_for(role,request)
+    result=asyncio.run(p.advance(settings.database,include_recent=True,runner=runner))
+    assert result['events']==1
+    assert calls==['event_curator','event_writer']
+    with Store(settings.database,read_only=True) as store:
+        saved=json.loads(store.conn.execute('SELECT input_json FROM pipeline_batches WHERE id=?',(batch['id'],)).fetchone()[0])
+        assert saved['routing_result']['_public_normalized'] is True
+        assert saved['routing_result']['assignments']==assignments
+
+
+def test_bad_cached_track_route_is_held_for_repair_without_consuming_originals(settings):
+    ingest(settings)
+    p.initialize(settings.database)
+    batch=p.new_batch(settings.database,True)
+    data=json.loads(batch['input_json'])
+    with Store(settings.database) as store:
+        for message in data['routing_messages']:
+            store.conn.execute('INSERT INTO pipeline_routes VALUES (?,?)',(message['id'],encode({
+                'source_message_id':message['id'],'primary_track_id':'session_foreign_track_0001',
+                'context_track_ids':[],'routing_role':'primary_activity'})))
+    calls=[]
+    async def runner(role,request):
+        calls.append(role)
+        return output_for(role,request)
+    result=asyncio.run(p.advance(settings.database,include_recent=True,runner=runner))
+    assert result['status']=='needs_repair' and 'session_foreign_track_0001' in result['reason']
+    assert calls==[]
+    with Store(settings.database,read_only=True) as store:
+        assert store.conn.execute('SELECT count(*) FROM raw_processing').fetchone()[0]==0
+        assert store.conn.execute('SELECT status FROM pipeline_batches WHERE id=?',(batch['id'],)).fetchone()[0]=='needs_repair'
+
+
 @pytest.mark.parametrize('role',['track_router','event_curator'])
 def test_id_correction_retry_keeps_bad_output_and_accepts_only_valid(settings,monkeypatch,role):
     ingest(settings)
