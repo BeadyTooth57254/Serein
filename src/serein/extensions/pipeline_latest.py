@@ -248,7 +248,7 @@ def _expand_compact_event_curator_output(output: dict[str, Any], component: dict
         ordered_source_ids = list(selected_source_ids)
         for root in event['owned_unit_roots']:
             membership_track_id = str(membership_by_root[root].get('track_id') or '')
-            role = ('bridge' if root_owner_count[root] > 1 or membership_track_id != primary_track_id
+            role = ('bridge' if root_owner_count[root] > 1 or membership_track_id != event['primary_track_id']
                     else 'primary_activity')
             for source_id in membership_by_root[root].get('source_message_ids') or [root]:
                 source_id = int(source_id)
