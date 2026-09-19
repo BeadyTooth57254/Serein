@@ -105,4 +105,5 @@ class CandidateGateway(GatewayService):
     def _typed_reranker_document(row: dict[str, Any]) -> str:
         title = str(row.get('title') or '').strip()
         passages = [str(passage.get('text') or '').strip() for passage in row.get('passages') or [] if isinstance(passage, dict) and str(passage.get('text') or '').strip()]
-        return f"title: {title}\nbody: {'\n'.join(passages[:2])}"[:4000]
+        body = '\n'.join(passages[:2])
+        return f"title: {title}\nbody: {body}"[:4000]
