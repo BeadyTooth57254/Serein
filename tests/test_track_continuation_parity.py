@@ -126,19 +126,45 @@ def test_individual_message_routes_and_bridge_ownership(settings):
                           for ref in ('new:1', 'new:2')]}
     p.submit(settings.database, task['job_id'], output)
     curator = asyncio.run(p.advance(settings.database, include_recent=True))
-    component = curator['request']['component']
-    assert [m['source_message_ids'] for m in component['memberships']] == [[1], [2], [3], [4]]
-    assert [m['routing_role'] for m in component['memberships']] == ['origin', 'landing', 'bridge', 'primary_activity']
-    first, second = [m['track_id'] for m in component['memberships'][:2]]
+    assert '单一 primary Track' in curator['request']['prompt']
+    with Store(settings.database, read_only=True) as store:
+        data = json.loads(store.conn.execute(
+            'SELECT input_json FROM pipeline_batches WHERE id=?',
+            (task['request']['batch_id'],),
+        ).fetchone()[0])
+    assignments = data['routing_result']['assignments']
+    first = assignments[0]['primary_track_id']
+    second = assignments[1]['primary_track_id']
     assert first != second
-    assert component['context_edges'] == [{'unit_root_message_id': 3, 'track_id': second, 'relation': 'bridge'}]
-    plan = {'events': [{'action': 'create', 'primary_track_id': first, 'base_event_ids': [], 'owned_unit_roots': [1, 3]},
-                       {'action': 'create', 'primary_track_id': second, 'base_event_ids': [], 'owned_unit_roots': [2, 3, 4]}],
-            'skip_unit_roots': [], 'defer_unit_roots': []}
-    normalized = latest.normalize_event_curator_output(plan, component)
-    assert normalized['events'][0]['source_message_ids'] == [1, 3]
-    assert normalized['events'][1]['source_message_ids'] == [2, 3, 4]
-    assert normalized['events'][0]['source_bindings'][1]['activity_role'] == 'bridge'
+    components = {item['track_ids'][0]: item for item in data['components']}
+    assert set(components) == {first, second}
+
+    first_component = components[first]
+    second_component = components[second]
+    assert [item['id'] for item in first_component['messages']] == [1, 3]
+    assert [item['id'] for item in second_component['messages']] == [2, 3, 4]
+    assert [item['track_id'] for item in first_component['track_cards']] == [first]
+    assert [item['track_id'] for item in second_component['track_cards']] == [second]
+    expected_edge = [{'unit_root_message_id': 3, 'track_id': second, 'relation': 'bridge'}]
+    assert first_component['context_edges'] == expected_edge
+    assert second_component['context_edges'] == expected_edge
+
+    first_plan = {'events': [{'action': 'create', 'primary_track_id': first,
+                              'base_event_ids': [], 'owned_unit_roots': [1, 3]}],
+                  'skip_unit_roots': [], 'defer_unit_roots': []}
+    second_plan = {'events': [{'action': 'create', 'primary_track_id': second,
+                               'base_event_ids': [], 'owned_unit_roots': [2, 3, 4]}],
+                   'skip_unit_roots': [], 'defer_unit_roots': []}
+    normalized_first = latest.normalize_event_curator_output(first_plan, first_component)
+    normalized_second = latest.normalize_event_curator_output(second_plan, second_component)
+    assert normalized_first['events'][0]['source_message_ids'] == [1, 3]
+    assert normalized_second['events'][0]['source_message_ids'] == [2, 3, 4]
+    first_roles = {item['source_message_id']: item['activity_role']
+                   for item in normalized_first['events'][0]['source_bindings']}
+    second_roles = {item['source_message_id']: item['activity_role']
+                    for item in normalized_second['events'][0]['source_bindings']}
+    assert first_roles[3] == 'primary_activity'
+    assert second_roles[3] == 'bridge'
 
 
 def test_track_anchor_continuation_and_parked_unused_state(settings):

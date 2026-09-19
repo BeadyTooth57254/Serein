@@ -125,7 +125,7 @@ def event_curator_model_input(component: dict[str, Any], snowflake_message_ids: 
 def build_event_track_curator_prompt(date_view: str, component: dict[str, Any], snowflake_message_ids: set[int] | None=None) -> str:
     model_input = event_curator_model_input(component, snowflake_message_ids)
     agent_rules = materialize_agent_rules('event_curator')
-    return f'[memory_phase: event_track_curator]\n日期范围：{date_view}（日期和沉默都不是 Event 边界）\n\n{agent_rules}\n\n你看到的是 declared bridge 相连的一整个 Track component。一次完成 admission 与最终 ownership，只返回：\n{{"events":[{{"action":"create","base_event_ids":[],"primary_track_id":"track_id","owned_unit_roots":[1]}}],"skip_unit_roots":[],"defer_unit_roots":[]}}\n\n只选择 scope=stable 的完整 unit。每个 stable unit 必须恰好进入 Event、skip 或 defer；只有 Router 已声明的 bridge unit 可以同时属于两条 Event。parked 与 context_only 只可阅读，不得拥有。\n\n选择 extend 或 merge 时只填写 base_event_ids；旧 Event 的全部 sources 与本轮 owned units 由 host 自动取 exact union，不要逐条抄写 source。Writer 将读取整个 component，并由 host 标记 owned/context_only。\n\nparked unit 若直接否定、纠正、改写或使紧邻 stable unit 的结果重新未落定，相关 stable 完整 unit 必须 defer；parked 若属于另一问题或 Track，则不影响已经落定的 stable admission。\n\n若 Track 的 event_policy=rolling_engineering：逐条阅读每个 base Event 的绑定原文，只选择仍服务同一建设 throughline 的 base。一条相关 base 用 extend，多条相关 base 必须全部 merge；误归线 base 不选。active base 数量不是相关性证据，唯一 base 不相关时允许 create。\n\n若 stable 原文语义上本应延续带 blocking_flags 的 base，仍输出拟议 extend/merge；host 会阻止替换并 defer 相连 unit，不得用 skip 绕过。\n\n只有整个 component 都缺少对象、真实起因或被纠正旧主张时，才可返回一次（reason 可选 missing_subject、missing_origin、missing_prior_claim）：\n{{"context_request":{{"track_id":"允许的 track_id","before_message_id":1,"reason":"missing_subject"}}}}\n\n<event_curator_input_json>\n{json.dumps(model_input, ensure_ascii=False)}\n</event_curator_input_json>\n'
+    return f'[memory_phase: event_track_curator]\n日期范围：{date_view}（日期和沉默都不是 Event 边界）\n\n{agent_rules}\n\n你看到的是单一 primary Track 的有界 corridor。declared bridge 只让当前 unit 在直接相连的 Track corridor 中共享，不合并整条 Track。一次完成 admission 与最终 ownership，只返回：\n{{"events":[{{"action":"create","base_event_ids":[],"primary_track_id":"track_id","owned_unit_roots":[1]}}],"skip_unit_roots":[],"defer_unit_roots":[]}}\n\n只选择 scope=stable 的完整 unit。每个 stable unit 必须恰好进入 Event、skip 或 defer；只有 Router 已声明的 bridge unit 可以同时属于两条 Event。parked 与 context_only 只可阅读，不得拥有。\n\n选择 extend 或 merge 时只填写 base_event_ids；旧 Event 的全部 sources 与本轮 owned units 由 host 自动取 exact union，不要逐条抄写 source。Writer 将读取整个 component，并由 host 标记 owned/context_only。\n\nparked unit 若直接否定、纠正、改写或使紧邻 stable unit 的结果重新未落定，相关 stable 完整 unit 必须 defer；parked 若属于另一问题或 Track，则不影响已经落定的 stable admission。\n\n若 Track 的 event_policy=rolling_engineering：逐条阅读每个 base Event 的绑定原文，只选择仍服务同一建设 throughline 的 base。一条相关 base 用 extend，多条相关 base 必须全部 merge；误归线 base 不选。active base 数量不是相关性证据，唯一 base 不相关时允许 create。\n\n若 stable 原文语义上本应延续带 blocking_flags 的 base，仍输出拟议 extend/merge；host 会阻止替换并 defer 相连 unit，不得用 skip 绕过。\n\n只有整个 corridor 都缺少对象、真实起因或被纠正旧主张时，才可返回一次（reason 可选 missing_subject、missing_origin、missing_prior_claim）：\n{{"context_request":{{"track_id":"允许的 track_id","before_message_id":1,"reason":"missing_subject"}}}}\n\n<event_curator_input_json>\n{json.dumps(model_input, ensure_ascii=False)}\n</event_curator_input_json>\n'
 
 def _expand_compact_event_curator_output(output: dict[str, Any], component: dict[str, Any]) -> dict[str, Any]:
     metadata_keys = {'_splitter_provider', '_splitter_model', '_splitter_provider_index', '_track_context_receipt', '_codex_job'}
@@ -247,7 +247,9 @@ def _expand_compact_event_curator_output(output: dict[str, Any], component: dict
         source_role: dict[int, str] = {source_id: inherited_source_roles.get(source_id, 'primary_activity') for source_id in selected_source_ids}
         ordered_source_ids = list(selected_source_ids)
         for root in event['owned_unit_roots']:
-            role = 'bridge' if root_owner_count[root] > 1 else 'primary_activity'
+            membership_track_id = str(membership_by_root[root].get('track_id') or '')
+            role = ('bridge' if root_owner_count[root] > 1 or membership_track_id != event['primary_track_id']
+                    else 'primary_activity')
             for source_id in membership_by_root[root].get('source_message_ids') or [root]:
                 source_id = int(source_id)
                 source_role[source_id] = role
@@ -423,6 +425,10 @@ def _normalize_expanded_event_curator_output(output: dict[str, Any], component: 
                 raise ValueError('Track Curator Event owned a foreign or parked source')
             if role not in EVENT_ACTIVITY_ROLES or any((item['source_message_id'] == source_id for item in bindings)):
                 raise ValueError('Track Curator source binding has invalid role or duplicate')
+            membership_track_id = str((membership_by_source.get(source_id) or {}).get('track_id') or '')
+            if (source_id in stable_ids and membership_track_id
+                    and membership_track_id != primary_track_id and role != 'bridge'):
+                raise ValueError('foreign primary-routed evidence must remain a declared bridge')
             binding = {'source_message_id': source_id, 'activity_role': 'bridge' if source_id in inherited_sources else role}
             bindings.append(binding)
             requested_owners_by_source.setdefault(source_id, []).append({'event_ref': event_ref, 'primary_track_id': primary_track_id, 'binding': binding, 'inherited_bridge': source_id in inherited_sources})
