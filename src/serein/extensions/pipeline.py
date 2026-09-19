@@ -373,33 +373,52 @@ def candidates(database,track_ids):
 
 
 def components(database,data,routed,*,include_materials=True):
+    """Build one bounded Curator corridor per primary Track.
+
+    A declared bridge shares only that direct routed unit with the context Track;
+    it never unions the full histories or base Events of both Tracks.
+    """
     assignments,tracks,_=route_result(data,routed)
     memberships,edges=routing_units(data['routing_messages'],assignments)
-    by_id={row['id']:row for row in data['routing_messages']};stable_ids={m['id'] for m in data['messages']}
-    graph={t['track_id']:set() for t in tracks}
-    for a in assignments:
-        for other in a['context_track_ids']:
-            graph[a['primary_track_id']].add(other);graph[other].add(a['primary_track_id'])
-    seen=set();result=[]
-    for track in graph:
-        if track in seen:continue
-        group=set();pending=[track]
-        while pending:
-            key=pending.pop()
-            if key in group:continue
-            group.add(key);pending.extend(graph[key]-group)
-        seen.update(group)
-        own=[a for a in assignments if a['primary_track_id'] in group]
-        stable=[by_id[a['source_message_id']] for a in own if a['source_message_id'] in stable_ids]
-        if not stable:continue
-        bases=candidates(database,group) if include_materials else []
-        context={a['source_message_id']:by_id[a['source_message_id']] for a in own}
-        for base in bases:context.update({m['id']:m for m in base['originals']})
-        result.append({'component_id':'+'.join(sorted(group)),'track_ids':sorted(group),'track_cards':[t for t in tracks if t['track_id'] in group],
-            'messages':stable,'context_messages':list(context.values()),'parked_context_source_ids':[a['source_message_id'] for a in own if a['source_message_id'] not in stable_ids],
-            'memberships':[unit for unit in memberships if unit['track_id'] in group],
-            'context_edges':[edge for edge in edges if edge['unit_root_message_id'] in {unit['unit_root_message_id'] for unit in memberships if unit['track_id'] in group}],
-            'base_event_candidates':bases,'context_session_ids':list({m['session_id'] for m in context.values()})})
+    by_id={row['id']:row for row in data['routing_messages']}
+    stable_ids={m['id'] for m in data['messages']}
+    edge_tracks_by_root={}
+    for edge in edges:
+        edge_tracks_by_root.setdefault(int(edge['unit_root_message_id']),set()).add(str(edge['track_id']))
+    result=[]
+    for card in tracks:
+        track_id=str(card['track_id'])
+        direct=[a for a in assignments
+                if a['primary_track_id']==track_id or track_id in a['context_track_ids']]
+        if not direct:
+            continue
+        stable=[by_id[a['source_message_id']] for a in direct if a['source_message_id'] in stable_ids]
+        if not stable:
+            continue
+        roots={
+            int(unit['unit_root_message_id'])
+            for unit in memberships
+            if unit['track_id']==track_id
+            or track_id in edge_tracks_by_root.get(int(unit['unit_root_message_id']),set())
+        }
+        component_memberships=[unit for unit in memberships if int(unit['unit_root_message_id']) in roots]
+        component_edges=[edge for edge in edges if int(edge['unit_root_message_id']) in roots]
+        bases=candidates(database,[track_id]) if include_materials else []
+        context={a['source_message_id']:by_id[a['source_message_id']] for a in direct}
+        for base in bases:
+            context.update({m['id']:m for m in base['originals']})
+        result.append({
+            'component_id':track_id,
+            'track_ids':[track_id],
+            'track_cards':[card],
+            'messages':stable,
+            'context_messages':list(context.values()),
+            'parked_context_source_ids':[a['source_message_id'] for a in direct if a['source_message_id'] not in stable_ids],
+            'memberships':component_memberships,
+            'context_edges':component_edges,
+            'base_event_candidates':bases,
+            'context_session_ids':list({m['session_id'] for m in context.values()}),
+        })
     return result
 
 
