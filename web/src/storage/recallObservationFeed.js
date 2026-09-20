@@ -32,7 +32,13 @@ export function createObservationFeed({ request, onChange, canReveal = () => fal
   }
   async function read(key, older = false) {
     if (disposed || !observationSources.includes(key)) return;
-    if (flights.has(key)) return flights.get(key).promise;
+    if (flights.has(key)) {
+      const flight = flights.get(key);
+      // Reaching the footer during a refresh must queue the older page rather
+      // than consume the IntersectionObserver event without loading anything.
+      if (older && !flight.older) return flight.promise.then(() => read(key, true));
+      return flight.promise;
+    }
     const start = feeds[key];
     if (older && (!start.loaded || !start.hasMore || !start.nextBeforeId)) return;
     const controller = new AbortController();
@@ -47,7 +53,7 @@ export function createObservationFeed({ request, onChange, canReveal = () => fal
       ...(older ? { beforeId: start.nextBeforeId } : initial ? {} : { afterId: start.afterId }),
     };
     publish(key, { ...start, loading: !older, loadingEarlier: older });
-    const flight = { controller, promise: null };
+    const flight = { controller, promise: null, older };
     flights.set(key, flight);
     flight.promise = (async () => {
       try {
