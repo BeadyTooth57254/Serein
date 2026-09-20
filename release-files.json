@@ -508,5 +508,8 @@
   "src/serein/extensions/pipeline_recovery.py",
   "tests/test_pipeline_route_history.py",
   "docs/route-recovery.md",
-  "tests/test_event_writer_concurrency.py"
+  "tests/test_event_writer_concurrency.py",
+  "web/src/storage/recallObservationFeed.js",
+  "web/src/hooks/useRecallObservationFeed.js",
+  "web/src/components/recall-observation-live.css"
 ]

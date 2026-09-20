@@ -25,8 +25,8 @@ def test_disabled_recall_is_visible_after_reply_and_restart(deployment,monkeypat
         store.conn.execute('INSERT INTO injection_debug(session_id,round_id,created_at,payload_json) VALUES (?,?,?,?)',
                            ('legacy',1,'2020-01-01',encode({'query':'old imported record'})))
     async def complete(*args,**kwargs):
-        # In-flight requests are not part of the review list.
-        assert [row['session_id'] for row in history(client)] == ['legacy']
+        assert [row['session_id'] for row in history(client)] == ['main', 'legacy']
+        assert history(client)[0]['payload']['request_status'] == 'upstream_pending'
         return answer()
     monkeypatch.setattr('serein.api.chat.complete',complete)
     query='时光代理人看到哪了？'
@@ -45,7 +45,7 @@ def test_disabled_recall_is_visible_after_reply_and_restart(deployment,monkeypat
     assert client.get('/api/gateway-injections',params={'before_id':row['id'],'limit':1}).json()['items'][0]['session_id']=='legacy'
 
 
-def test_existing_failed_pending_and_tool_rows_are_hidden_from_review(deployment):
+def test_existing_user_requests_are_visible_but_tool_rows_are_hidden(deployment):
     settings,client=deployment
     with Store(settings.database) as store,store.transaction():
         for kind,status in [('user_turn','failed'),('tool_continuation','completed'),
@@ -55,8 +55,9 @@ def test_existing_failed_pending_and_tool_rows_are_hidden_from_review(deployment
                                  'request_kind':kind,'request_status':status,'query':status})))
     result=client.get('/api/gateway-injections',params={'limit':1}).json()
     assert [item['payload']['query'] for item in result['items']]==['completed']
-    assert result['has_more'] is False
-    assert client.get('/api/gateway-injections',params={'review_ids':'1,2,3,4'}).json()['reviewed_items']==[]
+    assert result['has_more'] is True
+    result=client.get('/api/gateway-injections',params={'limit':1,'review_ids':'1,2,3,4'}).json()
+    assert [row['id'] for row in result['reviewed_items']]==[3,1]
 
 
 @pytest.mark.parametrize('mode',['selected','no_match','skip'])
@@ -93,18 +94,20 @@ def test_upstream_failure_does_not_claim_injection_or_advance_cooldown(deploymen
     monkeypatch.setattr('serein.api.chat.complete',complete)
     r=client.post('/v1/chat/completions',json={'messages':[{'role':'user','content':'A failed question'}],'serein':{'memory':True}})
     assert r.status_code==502
-    assert history(client)==[]
+    assert history(client)[0]['payload']['request_status']=='failed'
+    assert history(client)[0]['payload']['injected_bucket_ids']==[]
     with Store(settings.database,read_only=True) as store:
-        assert store.conn.execute('SELECT count(*) FROM injection_debug').fetchone()[0]==0
+        assert store.conn.execute('SELECT count(*) FROM injection_debug').fetchone()[0]==1
         assert store.conn.execute('SELECT count(*) FROM raw_events').fetchone()[0]==0
     assert recent_deliveries(settings.database,'main')==[]
 
 
-def test_not_ready_is_not_recorded_without_calling_upstream(deployment):
+def test_not_ready_is_recorded_without_claiming_delivery(deployment):
     _,client=deployment;configure(client)
     r=client.post('/v1/chat/completions',json={'messages':[{'role':'user','content':'Not ready'}],'serein':{'memory':True}})
     assert r.status_code==409
-    assert history(client)==[]
+    assert history(client)[0]['payload']['request_status']=='failed'
+    assert client.get('/v1/host/deliveries').json()['items']==[]
 
 
 @pytest.mark.parametrize('ending,expected',[('', False),('data: [DONE]\n\n',True),('data: {"error":{"message":"private upstream detail"}}\n\n',False)])
@@ -115,9 +118,8 @@ def test_stream_completion_is_required_for_observed_delivery(deployment,monkeypa
     monkeypatch.setattr(httpx,'AsyncClient',lambda **kw:original(transport=httpx.MockTransport(lambda req:httpx.Response(200,text=raw)),**kw))
     client.post('/v1/chat/completions',json={'messages':[{'role':'user','content':'Streaming question'}],'stream':True})
     rows=history(client)
-    assert len(rows)==int(expected)
-    if expected:
-        assert rows[0]['payload']['request_status']=='completed'
+    assert len(rows)==1
+    assert rows[0]['payload']['request_status']==('completed' if expected else 'failed' if 'error' in ending else 'interrupted')
     assert 'private upstream detail' not in json.dumps(rows)
 
 

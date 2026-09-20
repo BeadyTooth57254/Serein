@@ -382,8 +382,13 @@ export async function readLiveWindowShadows() {
   };
 }
 
-export async function readAssistantBridgeHookLedger(limit = 80, beforeId = 0, reviewIds = []) {
-  const result = await callSereinBackend(`/v1/host/deliveries?limit=${limit}&before_id=${beforeId}`);
+export async function readAssistantBridgeHookLedger(limit = 20, beforeId = 0, reviewIds = [], afterId = null) {
+  const params = new URLSearchParams({ limit: String(Math.max(1, Math.min(100, Number.parseInt(limit, 10) || 20))) });
+  if (beforeId) params.set('before_id', String(Math.max(0, Number.parseInt(beforeId, 10) || 0)));
+  if (afterId != null) params.set('after_id', String(Math.max(0, Number.parseInt(afterId, 10) || 0)));
+  const ids = [...new Set((Array.isArray(reviewIds) ? reviewIds : []).map(Number).filter(id => Number.isInteger(id) && id > 0))].slice(0, 500);
+  if (ids.length) params.set('review_ids', ids.join(','));
+  const result = await callSereinBackend(`/v1/host/deliveries?${params}`);
   if (!result.ok) throw new Error(`delivery_history_${result.status}`);
   return result.payload;
 }
@@ -413,6 +418,7 @@ function sereinGatewayBridge() {
       });
 
       server.middlewares.use("/__serein/assistant-bridge/hook-injections", async (request, response) => {
+        response.setHeader("Cache-Control", "no-store");
         response.setHeader("Content-Type", "application/json; charset=utf-8");
         if (request.method !== "POST") {
           response.statusCode = 405;
@@ -426,6 +432,7 @@ function sereinGatewayBridge() {
             body.limit,
             body.beforeId,
             body.reviewIds,
+            body.afterId,
           )));
         } catch (error) {
           response.statusCode = 502;
@@ -439,6 +446,7 @@ function sereinGatewayBridge() {
       });
 
       server.middlewares.use("/__serein/gateway/injections", async (request, response) => {
+        response.setHeader("Cache-Control", "no-store");
         response.setHeader("Content-Type", "application/json; charset=utf-8");
         if (request.method !== "POST") {
           response.statusCode = 405;
@@ -447,13 +455,14 @@ function sereinGatewayBridge() {
         }
         try {
           const body = await readJsonBody(request);
-          const limit = Math.max(1, Math.min(100, Number.parseInt(body.limit, 10) || 50));
+          const limit = Math.max(1, Math.min(100, Number.parseInt(body.limit, 10) || 20));
           const beforeId = Math.max(0, Number.parseInt(body.beforeId, 10) || 0);
           const reviewIds = [...new Set((Array.isArray(body.reviewIds) ? body.reviewIds : [])
             .map((item) => Number.parseInt(item, 10))
             .filter((item) => Number.isInteger(item) && item > 0))].slice(0, 500);
           const params = new URLSearchParams({ limit: String(limit), include_context: "0" });
           if (beforeId) params.set("before_id", String(beforeId));
+          if (body.afterId != null) params.set("after_id", String(Math.max(0, Number.parseInt(body.afterId, 10) || 0)));
           if (reviewIds.length) params.set("review_ids", reviewIds.join(","));
           const upstream = await callSereinDashboard(`/api/gateway-injections?${params.toString()}`);
           response.statusCode = upstream.status;

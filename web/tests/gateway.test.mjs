@@ -187,6 +187,16 @@ test('gateway separates web auth from API auth, saves settings and streams respo
       assert.equal(payload.status,'ok');
       assert.equal(payload.items[0].query,'A current request');
     }
+    for (const route of ['/__serein/assistant-bridge/hook-injections', '/__serein/gateway/injections']) {
+      const response=await fetch(base+route,{method:'POST',headers:postHeaders,
+        body:JSON.stringify({limit:20,afterId:0,reviewIds:[3,4]})});
+      assert.equal(response.status,200);
+      assert.equal(response.headers.get('cache-control'),'no-store');
+      const forwarded=new URL(requests.at(-1).path,base);
+      assert.equal(forwarded.searchParams.get('limit'),'20');
+      assert.equal(forwarded.searchParams.get('after_id'),'0');
+      assert.equal(forwarded.searchParams.get('review_ids'),'3,4');
+    }
     for (const args of [{proposalId:'nrev_test',offset:50}, {proposalId:'nrev_test',kind:'scene',identifier:'scene_test'}]) {
       const material = await fetch(base+'/__serein/memory/revision-materials', {
         method:'POST',headers:postHeaders,body:JSON.stringify(args),

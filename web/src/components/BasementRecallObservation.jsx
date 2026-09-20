@@ -9,6 +9,8 @@ import {
   WarningCircle,
   X,
 } from "@phosphor-icons/react";
+import { useRecallObservationFeed } from '../hooks/useRecallObservationFeed.js';
+import './recall-observation-live.css';
 import { semanticRouteSnapshot } from "../data/basement.js";
 import {
   appendSemanticRouteDraftExample,
@@ -23,9 +25,7 @@ import {
 import { buildRecallObservationTrainingExport } from "../storage/recallObservationExport.js";
 import {
   mergeObservationRows,
-  normalizeObservationPage,
   recallObservationPageLimits,
-  reviewedObservationIds,
 } from "../storage/recallObservationPagination.js";
 import { readRecallSimulationTrainingLabels } from "../storage/recallSimulationTraining.js";
 import { initializePersonal, loadPersonalScope } from "../storage/personalStore.js";
@@ -196,24 +196,15 @@ function formatObservedAt(value) {
   }).format(date);
 }
 
-function initialPaginationState() {
-  return {
-    hook: { hasMore: false, nextBeforeId: null, recoveredCount: 0 },
-    gateway: { hasMore: false, nextBeforeId: null, recoveredCount: 0 },
-  };
-}
-
 export function BasementRecallObservation() {
   const [draftRoutes, setDraftRoutes] = useState(readSemanticRouteDraft);
   const [publishedRoutes, setPublishedRoutes] = useState(semanticRouteSnapshot.routes);
   const [draftDatasetVersion, setDraftDatasetVersion] = useState(semanticRouteSnapshot.datasetVersion);
   const [draftConflict, setDraftConflict] = useState(null);
   const draftRevisionRef = useRef(0);
-  const [status, setStatus] = useState("loading");
-  const [errors, setErrors] = useState({});
-  const [datasets, setDatasets] = useState({ hook: [], gateway: [] });
-  const [pagination, setPagination] = useState(initialPaginationState);
-  const [pageLoading, setPageLoading] = useState({ hook: false, gateway: false });
+  const rootRef = useRef(null);
+  const bottomRef = useRef(null);
+  const [reviewsReady, setReviewsReady] = useState(false);
   const [source, setSource] = useState("gateway");
   const [filter, setFilter] = useState("all");
   const [reviews, setReviews] = useState(readRecallObservationReviews);
@@ -222,101 +213,33 @@ export function BasementRecallObservation() {
   const [exportNotice, setExportNotice] = useState("");
   const [manualSimulations, setManualSimulations] = useState(readRecallSimulationTrainingLabels);
 
-  const requestObservationPage = useCallback(async (sourceKey, { beforeId = null, reviewIds = [] } = {}) => {
-      const response = await fetch(
-        sourceKey === "hook"
-          ? "/__serein/assistant-bridge/hook-injections"
-          : "/__serein/gateway/injections",
-        {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            limit: recallObservationPageLimits[sourceKey],
-            beforeId,
-            reviewIds,
-          }),
-        },
-      );
-      const payload = await response.json();
-      if (!response.ok || payload?.status !== "ok") {
-        throw new Error(payload?.message || payload?.error || "没有读到记录");
-      }
-      return normalizeObservationPage(payload);
+  const { feeds, refresh: load, loadEarlier, reveal } = useRecallObservationFeed({
+    source, reviews, ready: reviewsReady, rootRef, bottomRef,
+  });
+  const datasets = useMemo(() => ({ hook: feeds.hook.rows, gateway: feeds.gateway.rows }), [feeds]);
+  const errors = useMemo(() => Object.fromEntries(Object.entries(feeds).filter(([, feed]) => feed.error).map(([key, feed]) => [key, feed.error])), [feeds]);
+  const pagination = useMemo(() => Object.fromEntries(Object.entries(feeds).map(([key, feed]) => [key, {
+    hasMore: feed.hasMore, nextBeforeId: feed.nextBeforeId, recoveredCount: feed.reviewed.length,
+  }])), [feeds]);
+  const pageLoading = { hook: feeds.hook.loadingEarlier, gateway: feeds.gateway.loadingEarlier };
+  const refreshing = feeds[source].loading;
+  const status = !reviewsReady || (!feeds.hook.loaded && !feeds.gateway.loaded && !Object.keys(errors).length)
+    ? 'loading' : feeds.hook.loaded || feeds.gateway.loaded ? 'done' : 'error';
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        await initializePersonal();
+        const rows = await loadPersonalScope('recall_review');
+        if (cancelled) return;
+        window.localStorage.setItem('serein.basement.recall-observation-review.v1', JSON.stringify(Object.fromEntries(rows.map(row => [row.key, row.value]))));
+        setManualSimulations(readRecallSimulationTrainingLabels());
+      } catch (error) { if (!cancelled) setExportNotice(error.message); }
+      if (!cancelled) { setReviews(readRecallObservationReviews()); setReviewsReady(true); }
+    })();
+    return () => { cancelled = true; };
   }, []);
-
-  const load = useCallback(async () => {
-    setStatus("loading");
-    setErrors({});
-    try {
-      await initializePersonal();
-      const rows = await loadPersonalScope("recall_review");
-      window.localStorage.setItem("serein.basement.recall-observation-review.v1", JSON.stringify(Object.fromEntries(rows.map(row => [row.key, row.value]))));
-      setManualSimulations(readRecallSimulationTrainingLabels());
-    } catch (error) { setExportNotice(error.message); }
-    const savedReviews = readRecallObservationReviews();
-    setReviews(savedReviews);
-    const [hookResult, gatewayResult] = await Promise.allSettled([
-      requestObservationPage("hook", { reviewIds: reviewedObservationIds(savedReviews, "hook") }),
-      requestObservationPage("gateway", { reviewIds: reviewedObservationIds(savedReviews, "gateway") }),
-    ]);
-    const nextErrors = {};
-    const hookPage = hookResult.status === "fulfilled"
-      ? hookResult.value
-      : (nextErrors.hook = hookResult.reason?.message || "无法读取 Hook 账本", normalizeObservationPage({}));
-    const gatewayPage = gatewayResult.status === "fulfilled"
-      ? gatewayResult.value
-      : (nextErrors.gateway = gatewayResult.reason?.message || "无法读取 Gateway 记录", normalizeObservationPage({}));
-    setDatasets({ hook: hookPage.rows, gateway: gatewayPage.rows });
-    setPagination({
-      hook: {
-        hasMore: hookPage.hasMore,
-        nextBeforeId: hookPage.nextBeforeId,
-        recoveredCount: hookPage.reviewedItems.length,
-      },
-      gateway: {
-        hasMore: gatewayPage.hasMore,
-        nextBeforeId: gatewayPage.nextBeforeId,
-        recoveredCount: gatewayPage.reviewedItems.length,
-      },
-    });
-    setErrors(nextErrors);
-    setStatus(Object.keys(nextErrors).length === 2 ? "error" : "done");
-  }, [requestObservationPage]);
-
-  const loadEarlier = useCallback(async (sourceKey) => {
-    const pageState = pagination[sourceKey];
-    if (!pageState?.hasMore || !pageState.nextBeforeId || pageLoading[sourceKey]) return;
-    setPageLoading((current) => ({ ...current, [sourceKey]: true }));
-    try {
-      const page = await requestObservationPage(sourceKey, { beforeId: pageState.nextBeforeId });
-      setDatasets((current) => ({
-        ...current,
-        [sourceKey]: mergeObservationRows(current[sourceKey], page.rows),
-      }));
-      setPagination((current) => ({
-        ...current,
-        [sourceKey]: {
-          hasMore: page.hasMore,
-          nextBeforeId: page.nextBeforeId,
-          recoveredCount: current[sourceKey].recoveredCount + page.reviewedItems.length,
-        },
-      }));
-      setErrors((current) => {
-        const next = { ...current };
-        delete next[sourceKey];
-        return next;
-      });
-    } catch (error) {
-      setErrors((current) => ({
-        ...current,
-        [sourceKey]: error instanceof Error ? error.message : "无法读取更早记录",
-      }));
-    } finally {
-      setPageLoading((current) => ({ ...current, [sourceKey]: false }));
-    }
-  }, [pageLoading, pagination, requestObservationPage]);
-
-  useEffect(() => { load(); }, [load]);
 
   useEffect(() => {
     const refreshManualSimulations = () => setManualSimulations(readRecallSimulationTrainingLabels());
@@ -392,8 +315,11 @@ export function BasementRecallObservation() {
   }), [datasets, publishedRouteActions]);
   const items = normalizedDatasets[source];
   const exportItems = useMemo(
-    () => [...normalizedDatasets.hook, ...normalizedDatasets.gateway],
-    [normalizedDatasets],
+    () => [
+      ...mergeObservationRows(feeds.hook.reviewed, datasets.hook).map(row => normalizeBridgeObservation(row, publishedRouteActions)),
+      ...mergeObservationRows(feeds.gateway.reviewed, datasets.gateway).map(normalizeObservation),
+    ].filter(item => !['pending', 'failed'].includes(item.outcome)),
+    [feeds, datasets, publishedRouteActions],
   );
   const exportPayload = useMemo(
     () => buildRecallObservationTrainingExport(exportItems, reviews, new Date().toISOString(), manualSimulations),
@@ -532,6 +458,8 @@ export function BasementRecallObservation() {
     injected: items.filter((item) => item.outcome === "injected").length,
     no_match: items.filter((item) => item.outcome === "no_match").length,
     skip: items.filter((item) => item.outcome === "skip").length,
+    pending: items.filter(item => item.outcome === "pending").length,
+    failed: items.filter(item => item.outcome === "failed").length,
   }), [items]);
 
   const downloadTrainingExport = useCallback(() => {
@@ -555,16 +483,16 @@ export function BasementRecallObservation() {
   }, [exportPayload, exportSummary]);
 
   return (
-    <section className="basement-workbench" aria-labelledby="recall-observation-title">
+    <section ref={rootRef} className="basement-workbench" aria-labelledby="recall-observation-title">
       <header className="basement-workbench__header">
         <div>
           <span className="basement-kicker">真实运行，只读观察</span>
           <h2 id="recall-observation-title">召回观察</h2>
-          <p>这里只看已完成的用户轮召回判断。失败请求和工具续轮不进入观察记录。</p>
+          <p>记录用户轮的准备、完成与中断状态；准备的记忆不等于成功交付。工具续轮不重复记账。</p>
         </div>
         <div className="observation-header-actions">
-          <button className="observation-refresh" type="button" onClick={load} disabled={status === "loading" || pageLoading.hook || pageLoading.gateway}>
-            <ArrowClockwise size={16} className={status === "loading" ? "is-spinning" : ""} aria-hidden="true" />
+          <button className="observation-refresh" type="button" onClick={load} disabled={refreshing || pageLoading[source]}>
+            <ArrowClockwise size={16} className={refreshing ? "is-spinning" : ""} aria-hidden="true" />
             刷新
           </button>
           <button
@@ -593,14 +521,22 @@ export function BasementRecallObservation() {
           ["injected", "已注入", counts.injected],
           ["no_match", "未命中", counts.no_match],
           ["skip", "已跳过", counts.skip],
+          ["pending", "进行中／未完成", counts.pending],
+          ["failed", "失败／中断", counts.failed],
           ["all", "全部", items.length],
         ].map(([key, label, count]) => (
           <button type="button" className={filter === key ? "is-active" : ""} key={key} onClick={() => setFilter(key)}>
             {label}<span>{count}</span>
           </button>
         ))}
-        <p>{source === "hook" ? "这里显示 Hook 的完成记录；按实际结果区分已注入、未命中与跳过，不代表客户端已显示回复。" : "全部指当前来源已加载的完成用户轮；迁入的旧记录标为历史记录。"}</p>
+        <p>{source === "hook" ? "这里显示 Hook 的完成记录；按实际结果区分已注入、未命中与跳过，不代表客户端已显示回复。" : "当前来源每次加载 20 条，页面可见时自动更新；失败和中断不计成功交付，迁入的旧记录标为历史记录。"}</p>
       </div>
+
+      {feeds[source].buffered.length > 0 && (
+        <div className="observation-live-notice" role="status">
+          <button type="button" onClick={reveal}>有 {feeds[source].buffered.length} 条新记录，点击查看</button>
+        </div>
+      )}
 
       {exportNotice && <p className="observation-export-notice" role="status">{exportNotice}</p>}
 
@@ -643,7 +579,7 @@ export function BasementRecallObservation() {
             const showDraft = ["false_positive", "missed"].includes(review.verdict);
             const form = draftForms[item.id] || { routeName: "", role: "typical" };
             return (
-              <article className="observation-card" key={item.id}>
+              <article className="observation-card" data-observation-id={item.id} key={item.id}>
                 <header>
                   <div>
                     <time>{formatObservedAt(item.createdAt)} · {sourceLabels[item.source]}</time>
@@ -701,7 +637,7 @@ export function BasementRecallObservation() {
                   <span>召回动作</span>
                   <div role="group" aria-label={`判断：${item.query}`}>
                     {verdicts.map(({ key, label, icon: Icon }) => (
-                      <button type="button" className={review.verdict === key ? "is-active" : ""} key={key} onClick={() => setVerdict(item, key)}>
+                      <button type="button" className={review.verdict === key ? "is-active" : ""} key={key} disabled={preparationOnly} onClick={() => setVerdict(item, key)}>
                         <Icon size={14} aria-hidden="true" />{label}
                       </button>
                     ))}
@@ -763,7 +699,7 @@ export function BasementRecallObservation() {
       )}
 
       {status === "done" && (datasets[source].length > 0 || !errors[source]) && (
-        <div className="observation-pagination" aria-live="polite">
+        <div ref={bottomRef} className="observation-pagination" aria-live="polite">
           <span>
             已加载 {sourceLabels[source]} {datasets[source].length} 条 · 首屏窗口 {recallObservationPageLimits[source]} 条
             {pagination[source].recoveredCount > 0 ? ` · 回查旧判断 ${pagination[source].recoveredCount} 条` : ""}
@@ -775,7 +711,7 @@ export function BasementRecallObservation() {
           >
             {pageLoading[source]
               ? "正在加载"
-              : errors[source] ? "重试加载更早" : pagination[source].hasMore ? "加载更早" : "已到当前最早"}
+              : errors[source] ? "重试加载更早" : pagination[source].hasMore ? "加载更早 20 条" : "已到当前最早"}
           </button>
         </div>
       )}
