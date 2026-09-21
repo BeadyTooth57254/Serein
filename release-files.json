@@ -488,6 +488,8 @@
   "scripts/upstream_update.py",
   "tests/test_upstream_update.py",
   "src/serein/api/authored_tools.py",
+  "src/serein/api/diary_read.py",
+  "tests/test_diary_discovery.py",
   "src/serein/extensions/pipeline_tracks.py",
   "tests/test_authored_mcp_parity.py",
   "tests/test_track_continuation_parity.py",
