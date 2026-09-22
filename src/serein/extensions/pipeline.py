@@ -387,11 +387,34 @@ async def route_batch(database,batch,data,runner):
 def source_key(ref):return (ref['source_system'],ref['session_id'],ref['message_id'])
 
 
-def candidates(database,track_ids):
+def base_event_window(policy, *, clock=None):
+    """Freeze a creation-time window when a new candidate snapshot is built."""
+    days=policy.get('base_event_lookback_days',3)
+    if type(days) is not int or not 1<=days<=365:
+        raise ValueError('Base Event lookback must be an integer between 1 and 365 days')
+    current=clock or datetime.now(timezone.utc)
+    if current.tzinfo is None:current=current.replace(tzinfo=timezone.utc)
+    current=current.astimezone(timezone.utc)
+    return {'lookback_days':days,'created_after':(current-timedelta(days=days)).isoformat(),
+            'created_before':current.isoformat()}
+
+
+def candidates(database,track_ids,*,window=None):
+    if window is None:window=base_event_window(read_settings(database)['pipeline'])
+    lower=datetime.fromisoformat(window['created_after'])
+    upper=datetime.fromisoformat(window['created_before'])
     result=[]
     with Store(database,read_only=True) as store:
         for track in track_ids:
-            for row in store.conn.execute("SELECT e.* FROM pipeline_track_events p JOIN fact_events e ON e.item_id=p.event_id WHERE p.track_id=? AND e.status='active'",(track,)):
+            rows=store.conn.execute("SELECT e.* FROM pipeline_track_events p JOIN fact_events e ON e.item_id=p.event_id "
+                "WHERE p.track_id=? AND e.status='active' AND julianday(e.created_at)>=julianday(?) "
+                "AND julianday(e.created_at)<=julianday(?) ORDER BY julianday(e.created_at),e.item_id",
+                (track,window['created_after'],window['created_before']))
+            for row in rows:
+                # SQLite narrows the read; Python keeps sub-millisecond boundaries exact.
+                created=datetime.fromisoformat(row['created_at'].replace('Z','+00:00'))
+                if created.tzinfo is None:created=created.replace(tzinfo=timezone.utc)
+                if not lower<=created<=upper:continue
                 refs=[dict(ref) for ref in store.conn.execute('SELECT * FROM fact_event_sources WHERE item_id=? ORDER BY id',(row['item_id'],))]
                 originals=[]
                 for ref in refs:
@@ -416,6 +439,10 @@ def components(database,data,routed,*,include_materials=True):
     memberships,edges=routing_units(data['routing_messages'],assignments)
     by_id={row['id']:row for row in data['routing_messages']}
     stable_ids={m['id'] for m in data['messages']}
+    window=data.get('base_event_window')
+    if include_materials and window is None:
+        window=base_event_window(data.get('input_policy') or read_settings(database)['pipeline'])
+        data['base_event_window']=window
     edge_tracks_by_root={}
     for edge in edges:
         edge_tracks_by_root.setdefault(int(edge['unit_root_message_id']),set()).add(str(edge['track_id']))
@@ -437,7 +464,7 @@ def components(database,data,routed,*,include_materials=True):
         }
         component_memberships=[unit for unit in memberships if int(unit['unit_root_message_id']) in roots]
         component_edges=[edge for edge in edges if int(edge['unit_root_message_id']) in roots]
-        bases=candidates(database,[track_id]) if include_materials else []
+        bases=candidates(database,[track_id],window=window) if include_materials else []
         context={a['source_message_id']:by_id[a['source_message_id']] for a in direct}
         for base in bases:
             context.update({m['id']:m for m in base['originals']})
@@ -451,6 +478,7 @@ def components(database,data,routed,*,include_materials=True):
             'memberships':component_memberships,
             'context_edges':component_edges,
             'base_event_candidates':bases,
+            'base_event_window':window,
             'context_session_ids':list({m['session_id'] for m in context.values()}),
         })
     return result
