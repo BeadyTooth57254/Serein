@@ -1,38 +1,30 @@
-# 自动摘要的归线与旧 Event 回看范围
+# 自动摘要的归线回看与 Event 候选边界
 
-设置 → 配置 → 自动摘要配置中的 **归线与旧 Event 回看天数** 默认是 3，可保存 1–365 之间的整数。对应设置字段为 `pipeline.base_event_lookback_days`，通过已有认证设置接口 `PATCH /v1/settings` 修改，例如：
+设置 → 配置 → 自动摘要配置中的 **归线 Track 回看天数** 默认是 3，可保存 1–365 之间的整数。对应设置字段为 `pipeline.track_lookback_days`，通过已有认证设置接口 `PATCH /v1/settings` 修改，例如：
 
 ```json
-{"pipeline":{"base_event_lookback_days":3}}
+{"pipeline":{"track_lookback_days":3}}
 ```
 
 旧实例没有保存该字段时使用默认 3 天；保存其他设置不会清除已经设置的天数。API 拒绝布尔值、小数、数字字符串以及范围外的整数。
 
-## 时间口径
+## Track 时间口径
 
-旧 Event 候选首次构建时，以服务端当时的 UTC 时间为基准，取前 N × 24 小时至基准时间的闭区间。默认 3 天即 72 小时，不按日历零点切分。时间范围随候选快照保存，重试不随时钟滚动。
+Track Router 以本批第一条待归线原话的时间为基准，读取此前 N × 24 小时内实际有已保存归线记录的 Track（含边界）；同来源且有明确 runtime／workspace 标记时仍保留隔离。多个聊天会话之间可以连续归线，API 客户端无需提供窗口身份。
 
-Track Router 以本批第一条待归线原话的时间为基准，读取此前 N × 24 小时内实际有已保存归线记录的 Track（含边界）；同来源且有明确 runtime／workspace 标记时仍保留隔离。多个聊天会话之间可以连续归线，API 客户端无需提供窗口身份。Track 以最后一次真实归入原话的时间判断，超过范围只是不送入本批 Router，卡片与已保存归线记录不会删除。调整天数对新批次和新归线请求生效；已冻结任务不回头重路由。
+Track 以最后一次真实归入原话的时间判断。超过范围只是不送入本批 Router，卡片与已保存归线记录不会删除；再次有新材料时可以建立新 Track。调整天数对新批次和新归线请求生效，已冻结任务不回头重路由。
 
-比较 Event 替换／合并链中最早一条记录的 `fact_events.created_at`。新建 Event 的首次创建时间就是自身的创建时间；续写生成后继记录也不会重置它。合并多条 Event 时取所有前身的最早创建时间。既有替换边和旧版单前身字段都用于追溯。不使用 `updated_at`、最后注入时间、绑定原话的开始或结束时间，也不判断话题最近是否活跃。聊天发生时间与 Event 首次创建时间是两个不同的字段：原话很旧、但 Event 首次创建于范围内，仍可能入选。
+## Event 候选边界
 
-现有同轨道和有效版本限制保留：`status='active'` 表示记录尚未被归档、替换或删除，不是“最近活跃”。首次创建时间在范围外的 Event 不加载它的绑定原文；入选后仍完整读取绑定原文，不截断消息、不改变来源归属。
+Event 不按创建时间过期，也不会因为超过三天而归档或退出召回。同一 Track 的所有 active Event leaves 都是 Curator 候选，并完整读取各自绑定原话；`rolling_engineering` 仍按真实建设关系选择全部相关 leaves 做 extend 或 merge。
 
-## 生效范围
+为避免候选集合无界增长，host 在读取绑定原话前先统计 active leaves。同一 Track 最多允许 8 条；出现第 9 条时，不截断、不按时间挑选，也不让模型在残缺材料上继续创建 Event。该 Track 本轮稳定原话全部 defer，保持未结算，且不调用 Curator 或 Writer；其他未超限 Track 继续正常处理。返回结果中的 `candidate_overflow_deferrals` 记录 Track、实际数量、上限与 Event IDs。
 
-天数使用新批次保存的输入配置。修改天数对新批次生效；已经冻结的候选材料、Curator 请求与已完成步骤保持原样，不自动重建。因此修改此项不会立即缩小一个已经冻结并超限的旧任务。
-
-这项设置控制归线时可见的旧 Track 和自动整理时的旧 Event 候选，不修改记忆正文、创建时间、归档状态、召回规则或原文存储；也不限制本轮待处理的新原话。没有入选的旧 Event 仍按原有规则参与召回。范围内可续接的 Event 保留原文与版本保护；范围外的新经历另建 Event，长期关系由 Arc 承接，不持续改写一条无限增长的 Event。
-
-## 当前边界
-
-本次是首次创建时间筛选，不是总字符预算。单个入选 Event 的原文很大、近期集中创建很多记录，仍可能超过完整提示词字符上限。到期的旧 Event 不会因近期续写、合并或修改而重新进入候选。
-
-候选分轮读取、总字符预算，以及既有冻结任务的显式重建不在本次改动范围。Arc 自动关联是独立的可选配置，且只关联已有 Arc；本设置不会自动创建 Arc。
+这个边界只限制 active leaf 数量，不改变 Event 正文、生命周期、引用保护、召回资格或原文证据。用户处理误归线、归档不再需要的叶子，或把相关叶子安全合并后，后续新批次可以继续。单条 active Event 自身绑定原话极大时，仍可能触及完整提示词字符上限。
 
 ## 测试
 
-`tests/test_pipeline_base_window.py` 与 `tests/test_track_continuation_parity.py` 使用合成数据，覆盖默认值、配置校验、跨会话归线、运行环境隔离、可调天数、时区和微秒边界、替换／合并链的首次创建时间、忽略最近更新时间、保留生命周期限制、范围外原文不读取，以及候选窗口冻结。完整检出并安装测试依赖后运行：
+`tests/test_pipeline_base_window.py` 与 `tests/test_track_continuation_parity.py` 使用合成数据，覆盖配置校验、跨会话归线、运行环境隔离、1/3/7 天 Track 可见范围、Event 不按年龄消失、8 条候选完整读取、第 9 条读取前 fail closed，以及 overflow Track defer。
 
 ```sh
 python -m pytest -q tests/test_pipeline_base_window.py tests/test_track_continuation_parity.py

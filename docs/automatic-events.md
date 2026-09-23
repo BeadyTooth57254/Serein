@@ -91,4 +91,6 @@ Writer 只读取按原图字节验证的转录与可见画面描述，初写及�
 
 公开导入的会话编号可以是不透明字符串；归线只依赖原话时间、来源和已有归线记录，保留 metadata.runtime / workspace_root 隔离。previous_session_id 不再决定 Track 的可见范围；不根据话题相似度虚构承接。
 
+旧 Event 不按 Track 回看天数过期。同一 Track 最多完整读取 8 条 active leaves；出现第 9 条时，host 不截断候选，也不调用 Curator 或 Writer，而是把该 Track 本轮稳定原话 defer，等待人工处理误归线、归档不再需要的叶子或安全合并。其他 Track 不受影响。Event 本身不会因此被归档或退出召回。
+
 旧协议尚未结束的任务保留为 superseded_protocol，未处理原话按新协议重新领取；已结算原话、Event 和归线记录保留。

@@ -387,7 +387,7 @@ def test_track_lookback_keeps_runtime_boundary_and_latest_activity(settings):
 
 @pytest.mark.parametrize('days,visible',[(1,False),(3,True)])
 def test_pipeline_setting_controls_router_track_visibility(settings,days,visible):
-    save_settings(settings.database,{'pipeline':{'base_event_lookback_days':days}})
+    save_settings(settings.database,{'pipeline':{'track_lookback_days':days}})
     raw_archive(settings).ingest([
         {'source_event_id':'old-user','session_id':'old','role':'user',
          'text':'Earlier synthetic request','created_at':'2026-09-21T12:00:00Z'},
