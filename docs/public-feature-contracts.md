@@ -142,7 +142,7 @@ Persona 是只读的状态卡片展示页：当前心情、内心独白/余韵�
 
 本基线按原始消息逐条路由，持久 ownership unit 是单条消息；完整问答 / 主动消息回复包用于判断是否可处理、是否整包 parked，不能与切分器看到的 unit 混为一谈。Curator 按 declared bridge 组成的 Track component 判断经历，必须完整覆盖 stable unit。相关 parked 纠正使前段延后；无关尾巴不拖住已落定经历。
 
-rolling_engineering 只合并回看范围内、仍服务同一建设主线的全部相关 active leaves；不强迫选同 Track 的所有旧 Event，不相关的唯一旧条目也不阻止 create。回看范围按替换／合并链的首次创建时间判断，续写不会重置计时；到期后新经历另建 Event，长期关系由 Arc 承接。命中 protected/manual/forked/blocked/scene_ref/narrative_ref 时，host 把拟议替换转成 defer。旧原文与新原文由 host 取 exact union，并继承来源角色；Writer 读取完整前版正文及其 owned 原文，防止短期内逐次合并丢掉早期内容。上下文不会因此获得证据所有权。
+归线和旧 Event 共用可调回看天数（默认三天）：Router 依据已保存归线原话的最近时间读取 Track，不要求 API 上游提供窗口身份；旧 Event 则按替换／合并链的首次创建时间判断，续写不会重置计时。rolling_engineering 只合并范围内、仍服务同一建设主线的全部相关 active leaves；不强迫选同 Track 的所有旧 Event，不相关的唯一旧条目也不阻止 create。到期后新经历另建 Event，长期关系由 Arc 承接。命中 protected/manual/forked/blocked/scene_ref/narrative_ref 时，host 把拟议替换转成 defer。旧原文与新原文由 host 取 exact union，并继承来源角色；Writer 读取完整前版正文及其 owned 原文，防止短期内逐次合并丢掉早期内容。上下文不会因此获得证据所有权。
 
 Writer 正文以 1000 字为写作硬上限而非目标，短经历写清即止，不凑字；较长或多次合并的经历优先保留不可替代的原话锚点、关键经过、因果与结果，不逐轮复述。host 以 1500 字作为模型计数误差的容错阈值，超过时进入纠错，程序不截断正文；保留自检与至多两轮结构／证据纠错，不重新切分。Writer 自检和图片转录保存到 pipeline_event_details；原文证据由现有 Event 事务绑定，保留活动叶、指纹、来源集合、引用保护与幂等收据。Scene 仍由聊天里的 agent 主动写，自动 Event 不进入 Bridge 信箱，也不生成 scene_candidate 或创建关系边。
 

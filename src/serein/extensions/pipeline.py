@@ -149,7 +149,8 @@ def new_batch(database,include_recent,clock=None):
                 if not stable:continue
                 scope=digest(encode([source,session]))[:20]
                 with latest.identity_scope(identity(database)):
-                    tracks,ordinal=track_state.load_tracks(store,source,session,eligible[0]['id'],message)
+                    tracks,ordinal=track_state.load_tracks(store,source,session,eligible[0]['id'],message,
+                                                           lookback_days=policy.get('base_event_lookback_days',3))
                 recent=[message(row) for row in store.conn.execute('SELECT * FROM raw_events WHERE source=? AND session_id=? AND id<? ORDER BY id DESC LIMIT 6',(source,session,eligible[0]['id']))][::-1]
                 data={'contract':CONTRACT,'input_policy':policy,'messages':stable,'parked':parked,'routing_messages':eligible,'tracks':tracks,'next_track_ordinal':ordinal,'scope':scope,'source':source,'recent':recent,'day':watermark.date().isoformat()}
                 key='pipeline:'+digest(encode(data))
@@ -1008,7 +1009,8 @@ async def _flush_routes_frozen(database):
         messages=[row for unit in units for row in unit];scope=digest(encode([source,session]))[:20]
         with Store(database) as store:
             with latest.identity_scope(identity(database)):
-                tracks,ordinal=track_state.load_tracks(store,source,session,messages[0]['id'],message)
+                tracks,ordinal=track_state.load_tracks(store,source,session,messages[0]['id'],message,
+                                                       lookback_days=config['policy'].get('base_event_lookback_days',3))
             recent=[message(r) for r in store.conn.execute('SELECT * FROM raw_events WHERE source=? AND session_id=? AND id<? ORDER BY id DESC LIMIT 6',(source,session,messages[0]['id']))][::-1]
             data={'contract':CONTRACT,'routing_messages':messages,'tracks':tracks,'next_track_ordinal':ordinal,'scope':scope,'recent':recent,'day':current.astimezone(TZ).date().isoformat()}
             key='route:'+digest(encode(data));batch={'id':key,'input_json':encode(data)}
