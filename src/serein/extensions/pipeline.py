@@ -388,7 +388,7 @@ def source_key(ref):return (ref['source_system'],ref['session_id'],ref['message_
 
 
 def base_event_window(policy, *, clock=None):
-    """Freeze a creation-time window when a new candidate snapshot is built."""
+    """Freeze the first-creation window when a new candidate snapshot is built."""
     days=policy.get('base_event_lookback_days',3)
     if type(days) is not int or not 1<=days<=365:
         raise ValueError('Base Event lookback must be an integer between 1 and 365 days')
@@ -397,6 +397,25 @@ def base_event_window(policy, *, clock=None):
     current=current.astimezone(timezone.utc)
     return {'lookback_days':days,'created_after':(current-timedelta(days=days)).isoformat(),
             'created_before':current.isoformat()}
+
+
+def first_event_created_at(conn,event_id):
+    """Find the oldest creation timestamp across a replacement/merge family."""
+    rows=conn.execute('''WITH RECURSIVE ancestors(item_id) AS (
+            SELECT ?
+            UNION
+            SELECT e.supersedes_item_id FROM fact_events e JOIN ancestors a ON e.item_id=a.item_id
+                WHERE e.supersedes_item_id<>''
+            UNION
+            SELECT edge.predecessor_id FROM fact_event_replacement_edges edge
+                JOIN ancestors a ON edge.successor_id=a.item_id
+        ) SELECT e.created_at FROM ancestors a JOIN fact_events e ON e.item_id=a.item_id''',(event_id,))
+    created=[]
+    for row in rows:
+        stamp=datetime.fromisoformat(row['created_at'].replace('Z','+00:00'))
+        created.append(stamp if stamp.tzinfo else stamp.replace(tzinfo=timezone.utc))
+    if not created:raise ValueError('Base Event has no creation timestamp')
+    return min(stamp.astimezone(timezone.utc) for stamp in created)
 
 
 def candidates(database,track_ids,*,window=None):
@@ -411,10 +430,9 @@ def candidates(database,track_ids,*,window=None):
                 "AND julianday(e.created_at)<=julianday(?) ORDER BY julianday(e.created_at),e.item_id",
                 (track,window['created_after'],window['created_before']))
             for row in rows:
-                # SQLite narrows the read; Python keeps sub-millisecond boundaries exact.
-                created=datetime.fromisoformat(row['created_at'].replace('Z','+00:00'))
-                if created.tzinfo is None:created=created.replace(tzinfo=timezone.utc)
-                if not lower<=created<=upper:continue
+                # The active successor can be new while its first predecessor is old.
+                # Resolve the family before loading any bound originals.
+                if not lower<=first_event_created_at(store.conn,row['item_id'])<=upper:continue
                 refs=[dict(ref) for ref in store.conn.execute('SELECT * FROM fact_event_sources WHERE item_id=? ORDER BY id',(row['item_id'],))]
                 originals=[]
                 for ref in refs:

@@ -14,7 +14,7 @@
 - 后续内容若直接补完、验证或实质修正前段正在处理的事项，可以保留为同一 Event。判断时应找到具体承接的事项，不能只凭“继续讨论同一主题”合并，也不能凭空推断一个未完成事项。已经有回复不等于经历已结束；话题仍可继续聊也不等于存在未完成事项。
 - 粗粒度工程规则不等于选中同 Track 的全部旧 Event。若候选里混入关系经历、作品讨论或其他误归线材料，只选择真正属于这段持续施工的 base；Track 仍只是候选范围。
 - 先判断参与者实际展开了什么活动，再判断每枚 unit 是否参与它的起因、推进或落点。提及相同对象、沿用相同称呼、时间相邻或具有共同背景，都不足以建立这种关系；不能把另一事项的进度当作本次活动的起因或结果。
-- event_policy=rolling_engineering 的 Track 是上述一般拆分条件的例外：仍服务同一 throughline 的材料必须合为一条滚动工程 Event；前项已经落定、后项与前项没有直接因果、出现局部目标、新 bug 或验证，都不足以拆分。只有原建设明确结束，或材料已转入另一项独立建设，才拆分。default Track 不得擅自套用这项例外。
+- event_policy=rolling_engineering 的 Track 只在本批提供的旧 Event 候选范围内续接：仍服务同一 throughline 的相关候选合为一条 Event；局部目标、新 bug 或验证本身不足以拆分。超过配置回看范围的旧 Event 不进入候选，新经历可另建 Event，长期关系由 Arc 承接；不要为了维持一条无限增长的 Event 追溯窗口外的旧记录。default Track 不得擅自套用粗粒度工程规则。
 - 普通完整交流可以在 {ai_name} 对用户的正常回复结束；不得把 {ai_name} 的回复从发起它的用户消息中孤立出去。
 - proactive/free-activity 必须等到用户首条回应后才能整体判断；没有用户回应的孤立主动消息不生成 Event。
 - 不可拆消息内并列多个实质目标时，优先保留一条复合 Event，不强造因果。只有它真实承接前后两条分别展开的完整 Event 时才允许 ownership bridge。
@@ -27,7 +27,7 @@
 - 若同一枚用户 unit 先明确结束前一话题、又发起下一话题，而下一 unit 继续回答新话题，这枚 declared bridge 必须同时归入前后两条 Event，不能只归给后者。
 - 当这枚 bridge 只含用户消息、恰好连接两个 Track、两边又各只有一条 Event 时，host 会确定性补全漏掉的一侧；bridge 已含 {ai_name} 的后话题回答或任一侧有多条 Event 时不会猜归属。
 - create 不选 base；extend 必须选一个 base；merge 必须选至少两个 base。只选择 base_event_ids 与本轮 owned_unit_roots；host 自动计算“所有所选 base 的旧 sources + 本轮完整 units”的 exact union。
-- 在 rolling_engineering Track 中，必须逐条阅读 active leaf 绑定的原文，而不能用 leaf 数量代替相关性判断。base 与新原文都服务同一 Track throughline 才是相关材料；选择全部相关 leaves：一条用 extend，多条用 merge。关系互动、作品讨论或其他误归线 leaf 保持未选择；即使它是唯一 active leaf，也允许为真正的新工程经历 create。
+- 在 rolling_engineering Track 中，逐条阅读本批提供的 active base 候选及其绑定原文，不能用候选数量代替相关性判断。base 与新原文都服务同一 Track throughline 才是相关材料；选择候选中全部相关 leaves：一条用 extend，多条用 merge。关系互动、作品讨论或其他误归线 leaf 保持未选择；没有相关的窗口内候选时允许 create，窗口外的 Event 不要求续写或合并。
 - protected、manual、forked、blocked、scene_ref 或 narrative_ref 的 base 不能被自动替换。若当前稳定原文在语义上本应 extend 或 merge 该 base，仍按实际关系输出带 base_event_ids 和 owned_unit_roots 的拟议 Event；host 会阻止写入并把相连的完整 dialogue unit 转成 defer。不得用 skip 绕过 blocker。
 - Writer 自动读取完整 corridor；阅读范围不是 ownership。context_only 只补对象、作品、代词和承接关系。context Track 的其他历史 Event 与 units 不得进入本 corridor。
 

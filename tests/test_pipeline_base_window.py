@@ -18,7 +18,9 @@ def catalog(monkeypatch):
     conn=sqlite3.connect(':memory:')
     conn.row_factory=sqlite3.Row
     conn.executescript('''
-        CREATE TABLE fact_events(item_id TEXT PRIMARY KEY,status TEXT,created_at TEXT,updated_at TEXT);
+        CREATE TABLE fact_events(item_id TEXT PRIMARY KEY,status TEXT,created_at TEXT,updated_at TEXT,
+            supersedes_item_id TEXT NOT NULL DEFAULT '');
+        CREATE TABLE fact_event_replacement_edges(predecessor_id TEXT PRIMARY KEY,successor_id TEXT,created_at TEXT);
         CREATE TABLE pipeline_track_events(track_id TEXT,event_id TEXT);
         CREATE TABLE fact_event_sources(id INTEGER PRIMARY KEY,item_id TEXT,source_system TEXT,session_id TEXT,
             message_id TEXT,role TEXT,content TEXT,created_at TEXT);
@@ -32,8 +34,11 @@ def catalog(monkeypatch):
         def __exit__(self,*args):return False
     monkeypatch.setattr(pipeline,'Store',ReadStore)
     monkeypatch.setattr(pipeline,'reference_blockers',lambda conn,key:[])
-    def add(key,created,*,status='active',track='track',updated=None,source_date='2020-01-01T00:00:00Z'):
-        conn.execute('INSERT INTO fact_events VALUES (?,?,?,?)',(key,status,created,updated or created))
+    def add(key,created,*,status='active',track='track',updated=None,source_date='2020-01-01T00:00:00Z',predecessors=()):
+        conn.execute('INSERT INTO fact_events VALUES (?,?,?,?,?)',
+                     (key,status,created,updated or created,predecessors[0] if predecessors else ''))
+        for predecessor in predecessors:
+            conn.execute('INSERT INTO fact_event_replacement_edges VALUES (?,?,?)',(predecessor,key,created))
         conn.execute('INSERT INTO pipeline_track_events VALUES (?,?)',(track,key))
         conn.execute('INSERT INTO fact_event_sources(item_id,source_system,session_id,message_id,role,content,created_at) '
                      'VALUES (?,\'synthetic\',\'window\',?,\'user\',?,?)',(key,key,'complete original '+key,source_date))
@@ -75,6 +80,41 @@ def test_creation_not_updated_or_source_activity(catalog):
     assert rows[0]['originals'][0]['created_at']=='2020-01-01T00:00:00Z'
     assert conn.execute("SELECT status FROM fact_events WHERE item_id='old'").fetchone()[0]=='active'
     assert conn.execute('SELECT count(*) FROM fact_event_sources').fetchone()[0]==2
+
+
+def test_recent_successor_keeps_first_creation_and_does_not_load_sources(catalog):
+    conn,add=catalog
+    add('first','2026-09-19T11:00:00Z',status='superseded')
+    add('successor','2026-09-22T11:00:00Z',predecessors=('first',))
+    calls=[]
+    conn.set_trace_callback(calls.append)
+    assert selected(pipeline.base_event_window({},clock=NOW))==[]
+    assert not any('FROM fact_event_sources' in sql or 'FROM raw_events' in sql for sql in calls)
+
+
+def test_merge_uses_earliest_creation_across_all_predecessors(catalog):
+    _,add=catalog
+    add('old','2026-09-19T11:00:00Z',status='superseded')
+    add('recent','2026-09-21T11:00:00Z',status='superseded')
+    add('merged','2026-09-22T11:00:00Z',predecessors=('recent','old'))
+    assert selected(pipeline.base_event_window({},clock=NOW))==[]
+
+
+def test_legacy_predecessor_and_multiple_successors_do_not_reset_age(catalog):
+    conn,add=catalog
+    add('first','2026-09-19T11:00:00Z',status='superseded')
+    add('second','2026-09-21T11:00:00Z',status='superseded',predecessors=('first',))
+    conn.execute('DELETE FROM fact_event_replacement_edges')  # legacy single-predecessor link
+    add('third','2026-09-23T11:00:00Z',predecessors=('second',))
+    assert selected(pipeline.base_event_window({},clock=NOW))==[]
+
+
+def test_recent_family_remains_eligible_until_its_first_creation_expires(catalog):
+    _,add=catalog
+    add('first','2026-09-20T12:00:00Z',status='superseded')
+    add('successor','2026-09-22T11:00:00Z',predecessors=('first',))
+    assert [row['event_id'] for row in selected(pipeline.base_event_window({},clock=NOW))]==['successor']
+    assert selected(pipeline.base_event_window({},clock=NOW+timedelta(microseconds=1)))==[]
 
 
 def test_inclusive_boundaries_offsets_and_microseconds(catalog):
