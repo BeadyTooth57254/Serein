@@ -193,7 +193,8 @@ def diary_text(result: dict[str, Any]) -> str:
 
 
 def favorites_text(result: dict[str, Any], *, with_evidence: bool) -> str:
-    lines = ["[favorites]", f"count: {len(result.get('items') or [])}"]
+    # Keep the bracketed section intact, after a plain-text lead for MCP clients.
+    lines = ["Serein favorites (plain text).", "[favorites]", f"count: {len(result.get('items') or [])}"]
     for item in result.get("items") or []:
         lines.extend(("", memory_text(item, with_evidence=with_evidence)))
     lines.extend((f"has_more: {str(bool(result.get('has_more'))).lower()}",

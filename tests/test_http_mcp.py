@@ -10,6 +10,58 @@ from serein.core.search import build_index
 from serein.deployment import save_settings
 
 
+@pytest.mark.parametrize('tool',['resume','read_favorites'])
+@pytest.mark.parametrize('with_materials',[False,True])
+def test_continuity_text_has_plain_prefix_and_complete_http_pages(tmp_path,monkeypatch,tool,with_materials):
+    from serein.core.personal import Personal
+    from serein.deployment import read_settings
+    settings=Settings(tmp_path/'continuity.db',writable=True,
+                      extensions={'handoff':{'page_chars':1000}})
+    bodies={f'scene_{i}':f'Synthetic body {i}.\n'*100 for i in range(2)} if with_materials else {}
+    with Store(settings.database) as store:
+        for key,body in bodies.items():store.create(key,'scene',key,body)
+    for key in bodies:Personal(settings.database).save('favorite',key,{'favorite':True},document_id=key)
+    save_settings(settings.database,{'features':{'resume':True,'favorites':True},'resume':{
+        'mcp_enabled':True,'latest_shadow':False,'recent_events':False,'favorite_scenes':False,
+        'pending_originals':False,'selected_memories':True,'selected_ids':list(bodies)}})
+    before=read_settings(settings.database)
+
+    @asynccontextmanager
+    async def lifecycle(app):yield
+    monkeypatch.setattr('serein.lifecycle.lifespan',lifecycle)
+    headers={'Authorization':'Bearer test','Accept':'application/json, text/event-stream'}
+    texts=[]
+    arguments={} if tool=='resume' else {'limit':1}
+    with TestClient(create_app(settings,token='test',live=True),headers=headers) as client:
+        for _ in range(20):
+            response=client.post('/serein/mcp',json={'jsonrpc':'2.0','id':1,'method':'tools/call',
+                'params':{'name':tool,'arguments':arguments}})
+            assert response.status_code==200,response.text
+            result=response.json()['result']
+            assert result['isError'] is False and 'structuredContent' not in result
+            assert len(result['content'])==1 and result['content'][0]['type']=='text'
+            text=result['content'][0]['text'];texts.append(text)
+            marker='resume' if tool=='resume' else 'favorites'
+            assert text.startswith('Serein ') and not text.lstrip().startswith('[')
+            assert text.splitlines()[1]==f'[{marker}]' and text.endswith(f'[/{marker}]')
+            if 'has_more: false' in text:break
+            if tool=='resume':arguments={'cursor':text.split('next_cursor: ',1)[1].split('\n',1)[0]}
+            else:arguments={'limit':1,'offset':int(text.split('next_offset: ',1)[1].split('\n',1)[0])}
+        else:pytest.fail('Continuation pagination did not finish')
+    if with_materials:
+        assert len(texts)>1
+        if tool=='resume':
+            fragments=[part.split('\n[/material]',1)[0] for text in texts for part in text.split('\nbody:\n')[1:]]
+            assert ''.join(fragments)==''.join(bodies.values())
+        else:
+            for key,body in bodies.items():
+                assert sum(f'id: scene:{key}' in text for text in texts)==1
+                assert body.strip() in '\n'.join(texts)
+    else:
+        assert len(texts)==1 and ('total_items: 0' if tool=='resume' else 'count: 0') in texts[0]
+    assert read_settings(settings.database)==before
+
+
 @pytest.mark.parametrize('writable', [False, True])
 def test_event_scene_switch_persists_and_refreshes_http_mcp(tmp_path, writable):
     from serein.application import Application
