@@ -82,7 +82,7 @@ export function ResumePage({onOpenSettings}) {
         {!valid&&<p className="resume-note">原话条数需填写 1–50 的整数，填好后会自动预览。</p>}
         {(dirty||!!pages.length)&&<p className="resume-note">{dirty&&'当前选择尚未保存。 '}{!!pages.length&&<>已读 {items.filter(item=>item.body_complete).length} / {last.total_items} 条 · {pages.length} 页{last.has_more?' · 还有资料':' · 已完整读取'}</>}</p>}
         <div ref={previewBody} className="resume-preview-scroll" tabIndex={0} role="region" aria-label="续接资料正文">
-        {!pages.length?<div className="resume-empty"><p>一窗结束，另一窗接起。</p><span>{previewing?'正在读取当前选择…':'勾选要带走的内容，预览会自动更新。'}</span></div>:<>
+        {previewError?<div className="resume-empty" role="alert"><p>续接资料读取失败</p><span>{previewError}</span><span>可点击上方“重新预览”重试。</span></div>:!pages.length?<div className="resume-empty"><p>一窗结束，另一窗接起。</p><span>{previewing?'正在读取当前选择…':'勾选要带走的内容，预览会自动更新。'}</span></div>:<>
           <div className="resume-materials">{items.length?items.map(item=><article key={item.id}>
             <p>{labels[item.section]||item.section}</p><h3>{item.title||'未命名'}</h3><small>{item.id}{item.created_at&&<> · <time dateTime={item.created_at}>{item.created_at.slice(0,10)}</time></>}</small>
             {item.kind==='raw'&&<p className="resume-note">{item.role==='user'?'用户':'助手'}</p>}
@@ -95,6 +95,6 @@ export function ResumePage({onOpenSettings}) {
             <button type="button" disabled={!!busy||previewing||last.has_more} onClick={copy}><Copy size={16}/>复制完整资料</button></div>
         }
       </section></div>}
-    {(error||previewError)&&config&&<p role="alert" className="resume-feedback">{error||previewError}</p>}{status&&<p role="status" className="resume-feedback">{status}</p>}
+    {error&&config&&<p role="alert" className="resume-feedback">{error}</p>}{status&&<p role="status" className="resume-feedback">{status}</p>}
   </div>;
 }

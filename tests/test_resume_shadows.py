@@ -64,7 +64,7 @@ def test_draft_resume_preview_pages_without_saving_or_changing_tool_selection(se
 
 
 @pytest.mark.parametrize('draft',[
-    *[{key:value} for key in ('command_enabled','mcp_enabled') for value in (True,False,None)],
+    *[{key:value} for key in ('command_enabled','mcp_enabled') for value in (None,'true',1)],
     [],{'mode':'mcp'},{'mode':None},{'recent_events':'true'},{'recent_original_limit':0},
     {'recent_original_limit':51},{'recent_original_limit':True},{'selected_ids':['x']*201},
     {'selected_ids':['']},{'features':{'resume':True}},
@@ -75,6 +75,36 @@ def test_draft_resume_preview_validates_content_options_without_saving(settings,
     client=TestClient(create_app(settings,token='test',live=True),headers={'Authorization':'Bearer test'})
     assert client.post('/v1/extensions/resume',json={'selection':draft}).status_code==422
     assert read_settings(settings.database)==before
+
+
+@pytest.mark.parametrize('command,mcp',[(False,False),(False,True),(True,False),(True,True)])
+def test_old_frontend_preview_ignores_entry_switches_without_changing_saved_selection(settings,command,mcp):
+    save_settings(settings.database,{'features':{'resume':True},'resume':{
+        'command_enabled':False,'mcp_enabled':True,'latest_shadow':False,
+        'recent_events':False,'favorite_scenes':False,'pending_originals':False,
+        'selected_memories':True,'selected_ids':['saved-scene']}})
+    with Store(settings.database) as store:
+        store.create('saved-scene','scene','Saved selection','Saved synthetic body')
+        store.create('draft-scene','scene','Draft selection','Draft synthetic body')
+    before=read_settings(settings.database)
+    client=TestClient(create_app(settings,token='test',live=True),headers={'Authorization':'Bearer test'})
+    # The old page removes only mode from GET /settings and echoes both switches.
+    draft={key:value for key,value in client.get('/v1/settings').json()['resume'].items() if key!='mode'}
+    draft.update(command_enabled=command,mcp_enabled=mcp,selected_ids=['draft-scene'])
+    response=client.post('/v1/extensions/resume',json={'selection':draft})
+    assert response.status_code==200,response.text
+    assert [item['id'] for item in response.json()['items']]==['draft-scene']
+    assert response.json()['selection']['command_enabled'] is False
+    assert response.json()['selection']['mcp_enabled'] is True
+    assert read_settings(settings.database)==before
+    saved=client.post('/v1/extensions/resume',json={}).json()
+    assert [item['id'] for item in saved['items']]==['saved-scene']
+    server=create_server(Application(settings))
+    assert 'resume' in {tool.name for tool in asyncio.run(server.list_tools())}
+    result=asyncio.run(server.call_tool('resume',{}))
+    blocks=result[0] if isinstance(result,tuple) else result
+    assert 'Saved synthetic body' in blocks[0].text
+    assert 'Draft synthetic body' not in blocks[0].text
 
 
 def test_draft_resume_preview_keeps_recent_and_pending_originals_exclusive(settings):
