@@ -278,14 +278,18 @@ def scope_members(reader):
             continue
         key=(row['document_id'],row['kind'],row['target_id'])
         dispositions.setdefault(key,set()).add(row['disposition'])
+    narratives_by_arc={}
+    for document_id, owner in narratives.items():
+        narratives_by_arc.setdefault(owner['arc_key'], []).append(document_id)
+    for row in conn.execute("SELECT arc_key,event_id FROM event_arc_links"):
+        for document_id in narratives_by_arc.get(row['arc_key'], []):
+            key=(document_id,'event',row['event_id'])
+            dispositions.setdefault(key,set()).add('appended')
     active={(row['kind'],row['id']) for row in conn.execute(
         "SELECT kind,id FROM documents WHERE kind IN ('event','scene') AND lifecycle!='deleted'")}
     for (document_id,kind,target_id),values in dispositions.items():
         if 'excluded' not in values and values.intersection({'linked','appended'}) and (kind,target_id) in active:
             members[narratives[document_id]['arc_key']].add((kind,target_id))
-    for row in conn.execute("SELECT arc_key,event_id FROM event_arc_links"):
-        if row['arc_key'] in members and ('event',row['event_id']) in active:
-            members[row['arc_key']].add(('event',row['event_id']))
     return members
 
 
@@ -428,25 +432,18 @@ def add_related_candidate(snapshot, ranked, rows, query, policy):
 
 
 def run(engine, query, result, gate, decision, embedding, *, cutoff, limit, use_passages,
-        with_evidence, body_char_limit, delivered_menu_keys, recall_ablation, deadline_at=None,
-        strategy='mixed'):
+        with_evidence, body_char_limit, delivered_menu_keys, recall_ablation, deadline_at=None):
     with Search(engine.settings.database,engine.settings.index) as search:
         association_enabled=read_from_store(search.reader.store)['features']['association']
         snapshot=Snapshot(search,query,engine.policy,embedding,cutoff,use_passages,engine.settings)
         upstream=CandidateGateway()
         upstream.__dict__.update(copy(gate.engine.__dict__))
-        entity_index=None
-        if upstream.observed_entity_shadow_index is None:
+        entity_index=upstream.observed_entity_shadow_index
+        if entity_index is None:
             del upstream.observed_entity_shadow_index
-        else:
-            index=upstream.observed_entity_shadow_index
-            entity_index=index
-            upstream.observed_entity_shadow_index=SimpleNamespace(resolve_query=index.resolve_query,
-                owner_query_matches=lambda *args,**kwargs:[],link_candidates=lambda *args:[])
         upstream.passage_candidate_shadow_enabled=True
         upstream._passage_candidate_shadow_catalog=snapshot.catalog
         upstream._passage_candidate_shadow_arc_members=scope_members(search.reader)
-        upstream._passage_candidate_shadow_arc_cards={}
         upstream.embedding_engine=snapshot
         upstream.passage_shadow_index=snapshot
         upstream.fact_event_semantic_index=snapshot
@@ -456,30 +453,27 @@ def run(engine, query, result, gate, decision, embedding, *, cutoff, limit, use_
             upstream.cue_passage_shadow_index=SimpleNamespace(search_by_embedding=lambda *a,**kw:{'matches':[]})
         if recall_ablation=='without_embedding':
             snapshot.whole.clear();snapshot.passages.clear()
-        found=upstream._passage_candidate_shadow_debug(query.text,embedding['embedding'])
-        # The old path is retained only for controlled replay, not exposed as a
-        # live API option. Production intentionally uses the mixed policy.
+        found=upstream.collect_signals(query.text,embedding['embedding'])
         if found.get('status')=='not_retrieved':
             ranked=[];all_entity_matches=[];rows=[];entry_counts=Counter()
         else:
-            ranked=mixed_candidates(snapshot,found,upstream._passage_candidate_shadow_arc_members,query) if strategy=='mixed' else found.get('candidates',[])
+            ranked=mixed_candidates(snapshot,found,upstream._passage_candidate_shadow_arc_members,query)
             all_entity_matches=_entity_matches(entity_index,query.text,
                 {(row['owner_kind'],row['owner_id']) for row in ranked})
             rows,entry_counts=select_candidate_pool(snapshot,found,ranked,all_entity_matches,query,
                 limit=engine.policy.direct_pool_limit,
                 body_threshold=engine.policy.body_candidate_threshold,
-                cue_threshold=engine.policy.cue_candidate_threshold) if strategy=='mixed' else (ranked,Counter())
+                cue_threshold=engine.policy.cue_candidate_threshold)
         scope=found.get('entity_scope',{})
-        result['candidate_policy']={**found.get('policy',{}),'selection_strategy':strategy}
-        if strategy=='mixed':
-            result['candidate_policy'].update(lane_quotas=None,cross_lane_score_comparison=True,
-                freshness_rerank='bounded_across_mixed_pool',pool_limit=engine.policy.direct_pool_limit+int(association_enabled),
-                direct_pool_limit=engine.policy.direct_pool_limit,base_vector_pool_limit=6,relation_pool_limit=int(association_enabled),
-                association_enabled=association_enabled,final_order='reranker_descending',vector_floor=None if cutoff == -1 else cutoff,
-                tail_body_or_passage_floor=engine.policy.body_candidate_threshold,
-                cue_semantic_floor=engine.policy.cue_candidate_threshold,
-                expansion_limits={'cue':3,'keyword':3,'entity':3},cue_contributes_score=False,
-                keyword_contributes_score=False,entity_contributes_score=False)
+        result['candidate_policy']={**found.get('policy',{}),'selection_strategy':'mixed'}
+        result['candidate_policy'].update(lane_quotas=None,cross_lane_score_comparison=True,
+            freshness_rerank='bounded_across_mixed_pool',pool_limit=engine.policy.direct_pool_limit+int(association_enabled),
+            direct_pool_limit=engine.policy.direct_pool_limit,base_vector_pool_limit=6,relation_pool_limit=int(association_enabled),
+            association_enabled=association_enabled,final_order='reranker_descending',vector_floor=None if cutoff == -1 else cutoff,
+            tail_body_or_passage_floor=engine.policy.body_candidate_threshold,
+            cue_semantic_floor=engine.policy.cue_candidate_threshold,
+            expansion_limits={'cue':3,'keyword':3,'entity':3},cue_contributes_score=False,
+            keyword_contributes_score=False,entity_contributes_score=False)
         result['candidate_retrieval']={k:found[k] for k in ('status','reason','candidate_count','entity_scope') if k in found}
         result['candidate_retrieval'].update(vector_ranked_count=len(ranked),base_pool_count=entry_counts['base_pool'],
             tail_eligible_count=entry_counts['tail_eligible'],tail_rejected_count=entry_counts['tail_rejected'],
@@ -494,7 +488,7 @@ def run(engine, query, result, gate, decision, embedding, *, cutoff, limit, use_
         result['surface_reranker_gate']={**surface,'entity_scope':scope}
         if surface.get('applied') or found.get('status')=='not_retrieved':
             return {**result,'status':'skipped','reason':found.get('reason') or surface['reason']}
-        if strategy=='mixed' and association_enabled:
+        if association_enabled:
             rows=add_related_candidate(snapshot,ranked,rows,query,engine.policy)
             if len(rows)>result['candidate_retrieval']['actual_candidate_count']:
                 rows[-1]['candidate_sources']=list(dict.fromkeys([*(rows[-1].get('candidate_sources') or []),'reviewed_scene_relation']))
@@ -503,9 +497,7 @@ def run(engine, query, result, gate, decision, embedding, *, cutoff, limit, use_
             result['candidate_retrieval']['candidate_count']=len(rows)
             result['candidate_retrieval']['actual_candidate_count']=len(rows)
         rows=[row for row in rows if row['owner_kind']!='event' or snapshot.catalog[row['owner_id']]['recallable']]
-        admission_scope=scope
-        if strategy=='mixed':
-            admission_scope={**scope,'operator':'none'}
+        admission_scope={**scope,'operator':'none'}
         rerank_query=resolve_person_references(query.text,upstream.identity) if query.user_utterance else query.text
         admission=evaluate_typed_admission_shadow(query.text,admission_scope,rows,direct_threshold=engine.policy.direct_threshold)
         scores={}
@@ -554,7 +546,7 @@ def run(engine, query, result, gate, decision, embedding, *, cutoff, limit, use_
                             key=lambda r:(r['memory_date'],upstream._typed_owner_ref(r)))[-maximum:]
         else:
             eligible=[r for r in rows if upstream._typed_owner_ref(r) in admitted]
-            if strategy=='mixed' and admission['mode']=='direct_evidence_rerank':
+            if admission['mode']=='direct_evidence_rerank':
                 eligible.sort(key=lambda r:-scores[upstream._typed_owner_ref(r)])
             selected=eligible[:maximum]
         result['pre_cooldown_selected_refs']=[upstream._typed_owner_ref(row) for row in selected]

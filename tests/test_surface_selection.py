@@ -369,7 +369,7 @@ def test_relation_candidate_stays_within_the_resolved_arc(legacy,monkeypatch):
     link_scenes(settings,[('out','s0','outside',1),('in','s0','inside',1)])
     monkeypatch.setattr('serein.recall.typed_surface.scope_members',lambda reader:{
         'arc:synthetic':{('scene',f's{i}') for i in range(6)}|{('scene','inside')}})
-    monkeypatch.setattr('serein.recall.typed_surface.CandidateGateway._passage_candidate_shadow_debug',
+    monkeypatch.setattr('serein.recall.typed_surface.CandidateGateway.collect_signals',
         lambda *args:{'status':'retrieved','entity_scope':{'scope_anchor':{'arc_key':'arc:synthetic'},
             'operator':'none'},'lanes':{}})
     result=engine.run('手机维修',method='semantic',min_cosine=.5)

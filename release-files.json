@@ -368,6 +368,7 @@
   "tests/test_appearance_images.py",
   "tests/test_public_settings.py",
   "tests/test_reader.py",
+  "tests/test_recall_efficiency.py",
   "tests/test_recall_policy.py",
   "tests/test_release_boundaries.py",
   "tests/test_requested_features.py",
