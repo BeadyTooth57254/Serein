@@ -2,6 +2,7 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import { eventMailboxBridge } from './server/eventMailboxBridge.mjs';
 import { appearanceBridge } from './server/appearanceBridge.mjs';
+import { backupDownload } from './server/backupDownload.mjs';
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, posix, win32 } from "node:path";
@@ -710,20 +711,7 @@ function sereinMemoryBridge() {
           response.end(Buffer.from(await result.arrayBuffer()));
         } catch {response.statusCode=502;response.end("Export unavailable");}
       });
-      server.middlewares.use("/__serein/export/backup", async (request,response)=>{
-        if(request.method!=="GET"){response.statusCode=405;response.end();return;}
-        try {
-          const base=process.env.SEREIN_MEMORY_URL;
-          const token=process.env.SEREIN_MEMORY_TOKEN;
-          if(!base || !token)throw new Error("backend_not_configured");
-          const result=await fetch(base.replace(/\/$/,"")+"/v1/export/backup",{headers:{Authorization:`Bearer ${token}`},signal:AbortSignal.timeout(60_000)});
-          response.statusCode=result.status;
-          response.setHeader("Cache-Control","no-store");
-          response.setHeader("Content-Type",result.ok?"application/octet-stream":"application/json");
-          if(result.ok)response.setHeader("Content-Disposition",'attachment; filename="serein-backup.db"');
-          response.end(Buffer.from(await result.arrayBuffer()));
-        } catch {response.statusCode=502;response.end("Export unavailable");}
-      });
+      server.middlewares.use("/__serein/export/backup", backupDownload);
       server.middlewares.use("/__serein/migration", async (request,response)=>{
         response.setHeader("Cache-Control","no-store");
         const path=new URL(request.url,"http://localhost").pathname;

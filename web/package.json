@@ -8,6 +8,7 @@
     "build": "vite build",
     "preview": "vite preview --host 127.0.0.1",
     "test": "node --test tests/*.test.mjs",
+    "test:backup-dom": "node tests/backup-download.dom.mjs",
     "test:mailbox-dom": "node tests/event-mailbox.dom.mjs",
     "test:darkroom-dom": "node tests/darkroom.dom.mjs",
     "test:scene-restore-dom": "node tests/scene-restore.dom.mjs"
