@@ -101,9 +101,9 @@ def tools_for(services, settings):
         """Set a Scene active, archived or deleted using its current updated_at. Lifecycle changes preserve the manual surfacing switch. Explicit restore_surface=true with active also enables surfacing in the same transaction. Deleted is a retained soft deletion. Events cannot be changed through this tool."""
         return sync_scene(scenes.edit(scene_id, expected_updated_at, status=status, restore_surface=restore_surface))
 
-    def write_diary(content: str, date: str = '', title: str = '', author: str = 'ai', unlock_at: str = ''):
-        """Write an authored diary. Date defaults to today (UTC+8), author to ai. A future unlock_at creates a sealed entry. IDs are generated internally; no kind or revision is needed. Use revise_diary for edits. Check existing entries before retrying a lost response."""
-        return notebook('create', write=True, content=content, date=date, title=title, author=author, unlock_at=unlock_at)
+    def write_diary(content: str, date: str = '', title: str = '', unlock_at: str = ''):
+        """Write an AI-authored diary. Date defaults to today (UTC+8). A future unlock_at creates a sealed entry. IDs are generated internally; no kind or revision is needed. Use revise_diary for edits. Check existing entries before retrying a lost response."""
+        return notebook('create', write=True, content=content, date=date, title=title, author='ai', unlock_at=unlock_at)
 
     def revise_diary(diary_id: int, content: str, title: str | None = None, date: str | None = None):
         """Revise a readable diary while preserving authorship and previous versions. Omitted title/date stay unchanged. Locked or deleted entries cannot be edited."""
