@@ -86,7 +86,7 @@ class EmbeddingClient:
             raise EmbeddingPermanentError(f"Set the configured embedding credential environment variable: {self.api_key_env}")
         payload = {"model": self.profile["model"], "input": inputs, "encoding_format": "float"}
         owned = client is None
-        client = client or httpx.Client(timeout=20, follow_redirects=False)
+        client = client or httpx.Client(timeout=120, follow_redirects=False)
         try:
             response = client.post(self.endpoint, json=payload, headers={"Authorization": f"Bearer {key}"} if key else {})
             check_response(response)
