@@ -86,7 +86,8 @@ class EmbeddingClient:
             raise EmbeddingPermanentError(f"Set the configured embedding credential environment variable: {self.api_key_env}")
         payload = {"model": self.profile["model"], "input": inputs, "encoding_format": "float"}
         owned = client is None
-        client = client or httpx.Client(timeout=120, follow_redirects=False)
+        client = client or httpx.Client(timeout=120, follow_redirects=False,
+                                        limits=httpx.Limits(max_keepalive_connections=0))
         try:
             response = client.post(self.endpoint, json=payload, headers={"Authorization": f"Bearer {key}"} if key else {})
             check_response(response)
@@ -111,3 +112,24 @@ class EmbeddingClient:
         finally:
             if owned:
                 client.close()
+
+
+# ── 连接韧性（2026-10-14）─────────────────────────────────────────────
+# 服务端（硅基流动边缘）会掐掉空闲连接，而 httpx 默认复用连接池，
+# 于是后续请求拿着一条已死的连接 → 立刻报 connection failed（表现为"超时或连接失败"）。
+# 直连测试 0.42s 正常、应用却报错，就是这一条。
+# 对策：网络类错误时，丢掉可能已污染的 client，用全新连接重试一次。
+_original_request = EmbeddingClient._request
+
+
+def _request_with_retry(self, inputs, count, *, client=None):
+    try:
+        return _original_request(self, inputs, count, client=client)
+    except EmbeddingTransientError:
+        import time as _time
+
+        _time.sleep(1.5)
+        return _original_request(self, inputs, count, client=None)
+
+
+EmbeddingClient._request = _request_with_retry
