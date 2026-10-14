@@ -16,6 +16,12 @@ MAX_HISTORY_JOBS = 256
 SOURCE_STATES = ('routed', 'done', 'superseded_input_budget')
 MESSAGE_KEYS = ('id', 'source', 'source_event_id', 'original_session_id',
                 'session_id', 'role', 'content', 'created_at')
+# rc65 before the replay-seed fix, with Windows CRLF or release LF files.
+# Only its completed, compacted producers qualify; unfinished work stays held.
+COMPACTED_ROUTER_REVISIONS = frozenset({
+    '4fc0c763905e28e35af100115e6b265817662d38d896e0eec0cb3b20f3f3f679',
+    '0a8a6382fe8f0e6e02e2f165c69c179cce0925669c59d30677f5a8e673099620',
+})
 
 
 def initialize(conn):
@@ -55,8 +61,11 @@ def _frames(database, batch):
     """Replay accepted jobs against THEIR inputs/ordinals, without invoking job()."""
     from . import pipeline as p
     original = json.loads(batch['input_json'])
+    legacy_compacted = (batch['status'] == 'done' and original.get('task_snapshot_compacted') is True
+        and all(key not in original for key in ('tracks', 'recent', 'next_track_ordinal', 'input_policy')))
     if (original.get('contract') != p.CONTRACT
-            or original.get('runtime_revision') != p.runtime_revision()
+            or (original.get('runtime_revision') != p.runtime_revision()
+                and not (legacy_compacted and original.get('runtime_revision') in COMPACTED_ROUTER_REVISIONS))
             or original.get('scope') != batch['scope']):
         raise p.RoutingRecoveryError('route producer has an incompatible frozen contract')
     if not _same_scope(original, original.get('routing_messages', [])):
@@ -86,7 +95,26 @@ def _frames(database, batch):
         if request.get('batch_id') != batch['id']:
             raise p.RoutingRecoveryError('Router job belongs to another producer batch')
         messages = p._router_prefix(original, request, cursor)
-        p.assert_router_state(original,request,state,ordinal,prior)
+        if legacy_compacted:
+            if 'routing_frame' not in request:
+                raise p.RoutingRecoveryError('compacted Router request has no frozen frame proof')
+            # Old compaction lost the complete seed AND candidate policy. Saved
+            # requests still prove their selected cards; retain every encountered
+            # card so a hidden candidate must match when it returns later.
+            if cursor == 0:
+                ordinal=request['next_track_ordinal'];prior=list(request.get('recent_context',[]))
+                if prior and not _same_scope(original,prior):
+                    raise p.RoutingRecoveryError('Router recent context is outside its frozen scope')
+            known={card['track_id']:card for card in state}
+            with Store(database,read_only=True) as store:
+                for card in request['active_tracks']:
+                    if card['track_id'] not in known:
+                        tracks.assert_before(store,[card],original['routing_messages'][0]['id'])
+                        state.append(card);known[card['track_id']]=card
+            selected=[known[card['track_id']] for card in request['active_tracks']]
+            p.assert_router_state({'input_policy':{}},request,selected,ordinal,prior)
+        else:
+            p.assert_router_state(original,request,state,ordinal,prior)
         if 'routing_frame' in request:
             with Store(database,read_only=True) as store:
                 tracks.assert_before(store,request['active_tracks'],messages[0]['id'])

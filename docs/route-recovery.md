@@ -10,6 +10,8 @@ Track 的当前延续卡会随新的窗口继续更新；`scope` 表示最后使
 
 历史回放不调用模型。它核对来源契约、原话编号/顺序/内容/角色/时间、当时的 ordinal、完整 assignment 和 bridge 两端；有下游任务时还核对冻结 component、predecessor 和 ownership。来源日间批次可能比当前结算批次大，因此按已完成 job 的输入块回放，不能使用看过未来原话的日终卡片。没有完整可信材料时保持 `needs_repair`，不会把缺失静默当成功。
 
+完成批的压缩快照保留 Router 初始 `tracks`、`recent`、`next_track_ordinal` 和候选筛选 `input_policy`。已知旧版压缩快照缺失这些字段时，从已保存的 Router 请求恢复初始状态，并继续核对后续状态、原话哈希和时间边界；候选 Track 暂时隐藏后重新出现，也必须符合之前的更新。此次旧版兼容只用于已完成的压缩批，未完成批仍保留代码升级审查，已有待修复计划可能需要明确重建一次。
+
 恢复结果写入当前批次快照。历史恢复只会补齐数据库里真正缺失的 Track 卡，绝不覆盖任何已经存在的全局卡片；因此即使旧卡缺少 `recent_source_message_ids`，也不会被历史状态倒灌。普通当前归线仍使用 `preserve_newer`。已经完成且相容的 Curator/Writer 结果继续复用。没有逐条保存的旧 provenance 不会在初始化时被猜测填充。
 
 ## 界面出口
