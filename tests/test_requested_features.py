@@ -127,6 +127,40 @@ def test_narrative_main_model_preview_save_cas_and_writer_interlock(live):
     with pytest.raises(ValueError):asyncio.run(tool('read',narrative_id='narrative_test'))
 
 
+def test_narrative_main_model_update_after_saving_only_materials(live):
+    from test_live_events import item
+
+    settings, client = live
+    original, scene = seed_narrative(client, settings)
+    added = client.post('/api/fact-events/batch', json={
+        'items': [item('A later synthetic event.', 'synthetic:later')],
+    }).json()['items'][0]['item_id']
+    save_settings(settings.database, {'features': {'narrative_tools': True}})
+    tool = Application(settings).contributions.tools['narrative_volume']
+    read = asyncio.run(tool('read', narrative_id='narrative_test', mode='edit', material_ids={
+        'event_ids': [original, added], 'scene_ids': [scene],
+        'diary_ids': [], 'darkroom_ids': [], 'upload_ids': [],
+    }))
+    assert read['status'] == 'ok'
+    unchanged_body = read['narrative']['body']
+    draft = asyncio.run(tool('preview', narrative_id='narrative_test',
+        body=unchanged_body, receipt=read['receipt']))
+    saved = asyncio.run(tool('save', narrative_id='narrative_test', receipt=draft['save_arguments']))
+    assert saved['status'] == 'updated' and saved['revision'] == 2
+
+    read = asyncio.run(tool('read', narrative_id='narrative_test', mode='update'))
+    assert read['status'] == 'ok'
+    assert read['receipt']['current_body'] == unchanged_body
+    assert [row['event_id'] for row in read['receipt']['materials']['events']] == [added]
+    assert read['receipt']['material_counts']['scenes'] == 0
+    draft = asyncio.run(tool('preview', narrative_id='narrative_test',
+        body='The narrative now includes the later synthetic event.', receipt=read['receipt']))
+    assert draft['writes_performed'] == []
+    saved = asyncio.run(tool('save', narrative_id='narrative_test', receipt=draft['save_arguments']))
+    assert saved['status'] == 'updated' and saved['model_called'] is False
+    assert asyncio.run(tool('read', narrative_id='narrative_test', mode='update'))['reason'] == 'no_new_materials'
+
+
 def test_narrative_api_writer_uses_text_only(settings, monkeypatch):
     save_settings(settings.database, {'models':[
         {'id':'writer','model':'synthetic-writer','base_url':'http://127.0.0.1:9/v1'}],
