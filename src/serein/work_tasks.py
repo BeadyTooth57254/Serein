@@ -109,7 +109,9 @@ def progress(**fields):
 
 def failure_reason(error):
     import httpx
-    if isinstance(error,(TimeoutError,httpx.TimeoutException)):return '模型或连接超时，请稍后继续。'
+    from .timeout_diagnostics import timeout_reason
+    reason=timeout_reason(error)
+    if reason is not None:return reason
     if isinstance(error,httpx.HTTPStatusError):return f'上游返回 HTTP {error.response.status_code}，请检查模型配置。'
     if isinstance(error,httpx.HTTPError):return '无法连接上游模型，请检查地址和网络。'
     if isinstance(error,json.JSONDecodeError):return '模型返回了无法解析的 JSON，请重试当前阶段。'

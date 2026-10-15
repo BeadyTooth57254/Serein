@@ -1,5 +1,7 @@
 """Model registry transport shared by chat and optional authoring tasks."""
+import asyncio
 from copy import deepcopy
+from time import monotonic
 import json
 import logging
 import time
@@ -8,6 +10,7 @@ from urllib.parse import urlsplit
 import httpx
 from .chat_context import ClientContext
 from .deployment import task_model
+from .timeout_diagnostics import annotate_timeout
 
 
 logger = logging.getLogger(__name__)
@@ -143,11 +146,17 @@ def normalize_response(model, result):
 
 async def complete(model, payload, *, window_id=''):
     url, headers, body = request_for(model, {**payload, 'stream':False}, window_id=window_id)
-    async with httpx.AsyncClient(timeout=httpx.Timeout(model.get('request_timeout_seconds',120),connect=15,pool=15), follow_redirects=False) as client:
-        response = await client.post(url, headers=headers, json=body)
-        if not response.is_success:
-            raise UpstreamError(response)
-        return normalize_response(model, response.json())
+    timeout=httpx.Timeout(model.get('request_timeout_seconds',120),connect=15,pool=15)
+    started=monotonic()
+    try:
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
+            response = await client.post(url, headers=headers, json=body)
+            if not response.is_success:
+                raise UpstreamError(response)
+            return normalize_response(model, response.json())
+    except (httpx.TimeoutException,asyncio.CancelledError) as error:
+        annotate_timeout(error,timeout,monotonic()-started)
+        raise
 
 
 class AnthropicStream:
