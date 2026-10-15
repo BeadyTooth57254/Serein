@@ -15,6 +15,9 @@ def routes(settings,auth):
         mode: Literal['auto','conversation','operit'] = 'auto'
         tagging: bool = True
 
+    class ImportOptions(BaseModel):
+        large_batch: bool = Field(default=False,strict=True)
+
     @router.post('/v1/imports/preview')
     def preview(body:Upload):
         return stage(settings.database,body.content,body.filename,body.mode,body.tagging)
@@ -36,12 +39,12 @@ def routes(settings,auth):
         return {'items':entries,'tagging':tags,'tagging_errors':failures}
 
     @router.post('/v1/imports/{identifier}/continue')
-    def proceed(identifier:str):
+    def proceed(identifier:str,body:ImportOptions|None=Body(default=None)):
         initialize_imports(settings.database)
         with Store(settings.database,read_only=True) as store:
             if not store.conn.execute('SELECT 1 FROM file_imports WHERE id=?',(identifier,)).fetchone():
                 raise ValueError('找不到导入任务')
-        return enqueue(settings.database,'import:'+identifier)
+        return enqueue(settings.database,'import:'+identifier,{'large_batch':body.large_batch if body else False})
 
     @router.post('/v1/imports/{identifier}/pause')
     def stop(identifier:str):

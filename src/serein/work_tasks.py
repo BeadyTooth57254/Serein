@@ -37,6 +37,8 @@ def _queue(value,arguments):
     value.update(status='queued',stage='queued',error='',arguments=arguments or {},run_id=uuid4().hex,
                  result=None,updated_at=time.time(),stop_requested=False,completed=0,events=0,
                  job_id='',attempt=0,prompt_chars=0)
+    if value['id'].startswith('import:'):
+        value.update(entries_per_second=None,eta_seconds=None,remaining=None,sampled_batches=0)
 
 
 def enqueue(database,key,arguments=None,*,followup_if_running=False):
@@ -227,16 +229,29 @@ async def work(settings,key,arguments):
                 if batch_curator_omissions:
                     continue  # Host-retained scope is excluded today; process other ready scopes.
                 return {**result,'status':'current','events':events,'note':'本批需要后续上下文，原话仍待整理；不会反复请求同一批。'}
-    from .imports import advance_import
+    from .imports import advance_import, DEFAULT_BATCH_SIZE, LARGE_BATCH_SIZE
     identifier=key.removeprefix('import:')
+    batch_size=LARGE_BATCH_SIZE if arguments.get('large_batch') is True else DEFAULT_BATCH_SIZE
+    seconds_per_entry=None;samples=0
     while True:
-        batch=asyncio.create_task(asyncio.to_thread(advance_import,settings,identifier))
+        started=time.monotonic()
+        batch=asyncio.create_task(asyncio.to_thread(advance_import,settings,identifier,batch_size=batch_size))
         try:result=await asyncio.shield(batch)
         except asyncio.CancelledError:
             await batch  # finish the bounded disk batch before releasing its lease
             raise
+        duration=time.monotonic()-started
+        processed=result['batch_processed']
+        if processed:
+            current=duration/processed
+            seconds_per_entry=current if seconds_per_entry is None else .3*current+.7*seconds_per_entry
+            samples+=1
+        remaining=result['total']-result['processed']
+        eta=remaining*seconds_per_entry if samples>=3 else None
         progress(stage='importing',completed=result['processed'],total=result['total'],
-                 failed=result['failed'],result=result)
+                 failed=result['failed'],result=result,remaining=remaining,sampled_batches=samples,
+                 entries_per_second=1/seconds_per_entry if seconds_per_entry else None,
+                 eta_seconds=0 if not remaining else eta)
         if result['status']=='completed':return result
         if status(settings.database,key).get('stop_requested'):return {**result,'status':'paused'}
 

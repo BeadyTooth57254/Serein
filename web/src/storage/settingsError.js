@@ -16,6 +16,7 @@ const FIELD_LABELS = {
   direct_threshold: "直接召回阈值", body_candidate_threshold: "正文候选扩展门槛",
   cue_candidate_threshold: "线索候选扩展门槛", direct_pool_limit: "候选池上限", passages_enabled: "长文分段检索",
   passage_min_chars: "长文起切字数", base_url: "接口地址", api_key: "API 密钥",
+  embedding_batch_size: "向量每批条数", embedding_concurrency: "向量请求并发数", index_catch_up: "加快后台索引追赶",
   api_key_env: "密钥环境变量名", model: "模型名称", upstream_model: "上游模型名称",
   name: "名称", label: "显示名称", id: "标识", dimension: "向量维度", protocol: "接口格式",
   prompt_cache: "提示词缓存策略", prompt_cache_retention: "缓存保留时间",

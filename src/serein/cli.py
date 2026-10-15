@@ -113,12 +113,14 @@ def main():
     http.add_argument('--live', action='store_true', help='Enable writable production client adapters')
     sub.add_parser("vector-coverage", help="Report current Event/Scene whole-body vector coverage")
     filling = sub.add_parser("fill-vectors", help="Fill missing Event/Scene vectors using the configured provider")
-    filling.add_argument("--batch-size", type=int, default=16)
+    filling.add_argument("--batch-size", type=int, help='Override the saved embedding batch size (default 16)')
+    filling.add_argument('--concurrency',type=int,choices=range(1,5),help='Override saved embedding request concurrency (default 1)')
     filling.add_argument("--limit", type=int)
     sub.add_parser('prepare-passages', help='Prepare exact passage slices without calling a model')
     sub.add_parser('passage-coverage', help='Report prepared passage vector coverage')
     passage_fill=sub.add_parser('fill-passages', help='Generate missing passage vectors; does not enable passage recall')
-    passage_fill.add_argument('--batch-size',type=int,default=16)
+    passage_fill.add_argument('--batch-size',type=int,help='Override the saved embedding batch size (default 16)')
+    passage_fill.add_argument('--concurrency',type=int,choices=range(1,5),help='Override saved embedding request concurrency (default 1)')
     sub.add_parser('rebuild-entities', help='Recheck entity vocabulary against current bound original snapshots')
     args = parser.parse_args()
     configured_commands = {"index-status", "resume-index", "import-chat", "prepare-routes", "setup", "read", "materials", "search", "capabilities", "mcp", "mcp-live", "http", "vector-coverage", "fill-vectors", 'prepare-passages','passage-coverage','fill-passages','rebuild-entities'}
@@ -186,14 +188,14 @@ def main():
         if args.command in {"vector-coverage", "fill-vectors"}:
             from serein.recall.vectors import coverage, fill_vectors
             result = coverage(settings.database, settings.index) if args.command == "vector-coverage" else fill_vectors(
-                settings, batch_size=args.batch_size, limit=args.limit)
+                settings, batch_size=args.batch_size, concurrency=args.concurrency, limit=args.limit)
             print(json.dumps(result, ensure_ascii=False))
             return
         if args.command in {'prepare-passages','passage-coverage','fill-passages','rebuild-entities'}:
             from serein.recall.passages import prepare_passages,passage_coverage,fill_passages
             from serein.recall.entities import rebuild_entities
             functions={'prepare-passages':prepare_passages,'passage-coverage':passage_coverage,'fill-passages':fill_passages,'rebuild-entities':rebuild_entities}
-            options={'batch_size':args.batch_size} if args.command=='fill-passages' else {}
+            options={'batch_size':args.batch_size,'concurrency':args.concurrency} if args.command=='fill-passages' else {}
             print(json.dumps(functions[args.command](settings,**options),ensure_ascii=False))
             return
     if args.command == "build-index":

@@ -17,13 +17,21 @@ class RecallPolicy:
     germany_policy_file: str | None = None
     passages_enabled: bool = False
     passage_min_chars: int = 500
+    embedding_batch_size: int = 16
+    embedding_concurrency: int = 1
+    index_catch_up: bool = False
 
     @classmethod
     def from_config(cls, raw):
-        unknown = raw.keys() - {"direct_threshold", "body_candidate_threshold", "cue_candidate_threshold", "direct_pool_limit", "max_cards", "candidate_limit", "domains", "domain_rules", "routing_file", "germany_policy_file", "passages_enabled", "passage_min_chars"}
+        unknown = raw.keys() - {"direct_threshold", "body_candidate_threshold", "cue_candidate_threshold", "direct_pool_limit", "max_cards", "candidate_limit", "domains", "domain_rules", "routing_file", "germany_policy_file", "passages_enabled", "passage_min_chars", "embedding_batch_size", "embedding_concurrency", "index_catch_up"}
         if unknown:
             raise ValueError(f"Unknown recall policy fields: {', '.join(sorted(unknown))}")
         policy = cls(**raw)
+        if type(policy.embedding_batch_size) is not int or not 1<=policy.embedding_batch_size<=64:
+            raise ValueError('embedding_batch_size must be an integer between 1 and 64')
+        if type(policy.embedding_concurrency) is not int or not 1<=policy.embedding_concurrency<=4:
+            raise ValueError('embedding_concurrency must be an integer between 1 and 4')
+        if type(policy.index_catch_up) is not bool:raise ValueError('index_catch_up must be boolean')
         if type(policy.direct_pool_limit) is not int or not 6 <= policy.direct_pool_limit <= 100:
             raise ValueError('direct_pool_limit must be an integer between 6 and 100')
         thresholds=(policy.direct_threshold,policy.body_candidate_threshold,policy.cue_candidate_threshold)
