@@ -184,11 +184,15 @@ def passage_coverage(settings):
 
 
 @guarded_index
-def fill_passages(settings, *, client=None, batch_size=16, progress=None, document_ids=None):
+def fill_passages(settings, *, client=None, batch_size=None, concurrency=None, progress=None, document_ids=None, with_coverage=True):
     from ..configured_models import recall_settings
     from .policy import RecallPolicy
-    if not RecallPolicy.from_config(recall_settings(settings)).passages_enabled:
+    from .embedding_batches import request_batches
+    policy=RecallPolicy.from_config(recall_settings(settings))
+    if not policy.passages_enabled:
         return {'status':'disabled','planned':0,'embedded':0,'requests':0,'canonical_writes':0}
+    batch_size=policy.embedding_batch_size if batch_size is None else batch_size
+    concurrency=policy.embedding_concurrency if concurrency is None else concurrency
     client=client or EmbeddingClient(settings.database,settings.index,**settings.embedding)
     document_ids=None if document_ids is None else set(document_ids)
     prepare_passages(settings,document_ids=document_ids,client=client)
@@ -205,20 +209,21 @@ def fill_passages(settings, *, client=None, batch_size=16, progress=None, docume
             text=doc['title'].strip()+'\n'+row['text'] if doc['kind']=='event' and doc['title'].strip() else row['text']
             pending.append({**dict(row),'input':text})
     report={'planned':len(pending),'embedded':0,'requests':0,'changed':0,'canonical_writes':0}
-    if not 1<=batch_size<=64: raise ValueError('Invalid batch size')
-    for offset in range(0,len(pending),batch_size):
-        batch=pending[offset:offset+batch_size]
-        vectors=client.documents([row['input'] for row in batch])
-        if len(vectors)!=len(batch): raise ValueError('Passage vector count mismatch')
-        with sqlite3.connect(Path(settings.index).resolve().as_uri()+'?mode=rw',uri=True) as conn, Reader(settings.database) as reader:
-            for row,vector in zip(batch,vectors):
-                obj=reader.read(row['document_id'],with_evidence=False)
-                if not obj['readable'] or content_stamp(obj['document'])!=row['stamp']:
-                    report['changed']+=1
-                    continue
-                cursor=conn.execute('UPDATE passages SET embedding=?,dimension=? WHERE document_id=? AND ordinal=? AND stamp=? AND text=? AND embedding IS NULL',
-                    (encode(unit_vector(vector,client.dimension)),client.dimension,row['document_id'],row['ordinal'],row['stamp'],row['text']))
-                report['embedded']+=cursor.rowcount
-        report['requests']+=1
-        if progress: progress(dict(report))
-    return {**report,'coverage':passage_coverage(settings)}
+    with closing(request_batches(client,pending,batch_size=batch_size,concurrency=concurrency)) as batches:
+        for batch,vectors in batches:
+            with closing(sqlite3.connect(Path(settings.index).resolve().as_uri()+'?mode=rw',uri=True)) as conn, conn, Reader(settings.database) as reader:
+                conn.execute('BEGIN IMMEDIATE')
+                current=json.loads(conn.execute("SELECT value FROM settings WHERE key='embedding_profile'").fetchone()[0])
+                dimension=json.loads(conn.execute("SELECT value FROM settings WHERE key='embedding_dimension'").fetchone()[0])
+                if current!=stored or dimension!=client.dimension:raise ValueError('Index embedding configuration changed during passage fill')
+                for row,vector in zip(batch,vectors):
+                    obj=reader.read(row['document_id'],with_evidence=False)
+                    if not obj['readable'] or content_stamp(obj['document'])!=row['stamp']:
+                        report['changed']+=1
+                        continue
+                    cursor=conn.execute('UPDATE passages SET embedding=?,dimension=? WHERE document_id=? AND ordinal=? AND stamp=? AND text=? AND embedding IS NULL',
+                        (encode(vector),client.dimension,row['document_id'],row['ordinal'],row['stamp'],row['text']))
+                    report['embedded']+=cursor.rowcount
+            report['requests']+=1
+            if progress: progress(dict(report))
+    return {**report,**({'coverage':passage_coverage(settings)} if with_coverage else {})}

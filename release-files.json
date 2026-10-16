@@ -235,6 +235,7 @@
   "src/serein/model_discovery.py",
   "src/serein/model_jobs.py",
   "src/serein/model_runtime.py",
+  "src/serein/timeout_diagnostics.py",
   "src/serein/recall/__init__.py",
   "src/serein/recall/admission.py",
   "src/serein/recall/arc.py",
@@ -586,5 +587,15 @@
   "web/tests/scene-restore-fixture.js",
   "web/tests/scene-restore.dom.mjs",
   "web/tests/scene-restore-preview.html",
-  "tests/test_chat_eyes_fallback.py"
+  "tests/test_chat_eyes_fallback.py",
+  "scripts/benchmark_file_imports.py",
+  "tests/test_import_batches.py",
+  "web/src/utils/importProgress.js",
+  "web/tests/import-progress.test.mjs",
+  "web/tests/import-batches.dom.mjs",
+  "docs/import-performance.md",
+  "src/serein/recall/embedding_batches.py",
+  "tests/test_index_throughput.py",
+  "scripts/benchmark_memory_jobs.py",
+  "web/tests/index-throughput.dom.mjs"
 ]

@@ -82,7 +82,10 @@ class CandidateGateway(GatewayService):
                 'global_named_fallback': global_named_fallback,
                 'event_eligibility': 'all_active',
             },
-            'lanes': {'scene': {'matches': scene_lane}, 'event': {'matches': event_lane}},
+            'lanes': {
+                'scene': {'matches': scene_lane, 'cue_search': cue_search},
+                'event': {'matches': event_lane, 'lexical_search': lexical_search},
+            },
             'entity_scope': entity_scope,
         }
 

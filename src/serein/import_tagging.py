@@ -155,7 +155,7 @@ async def process(database):
             store.conn.execute('DELETE FROM tagging_outbox WHERE document_id=?',(doc['id'],))
     with Store(database,read_only=True) as store:
         jobs=[dict(row) for row in store.conn.execute("SELECT j.* FROM import_tag_jobs j LEFT JOIN file_imports f ON f.id=j.upload_id "
-             "WHERE j.status='pending' AND (j.upload_id='' OR f.cursor=json_array_length(f.payload_json,'$.entries')) ORDER BY j.rowid LIMIT 2")]
+             "WHERE j.status='pending' AND (j.upload_id='' OR f.cursor=COALESCE(json_extract(f.payload_json,'$.total'),json_array_length(f.payload_json,'$.entries'))) ORDER BY j.rowid LIMIT 2")]
     await asyncio.gather(*(tag_one(database,job) for job in jobs))
 
 

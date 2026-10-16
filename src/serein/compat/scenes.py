@@ -22,8 +22,11 @@ def initialize_scene_ids(database):
         map_evidence_ids(store)
 
 
-def map_evidence_ids(store):
-    store.conn.execute("INSERT OR IGNORE INTO scene_evidence_ids(binding_id) SELECT b.id FROM evidence_bindings b JOIN documents d ON d.id=b.document_id WHERE d.kind='scene' ORDER BY b.id")
+def map_evidence_ids(store,document_ids=None):
+    keys=list(dict.fromkeys(document_ids)) if document_ids is not None else None
+    if keys==[]:return
+    selected=' AND b.document_id IN ('+','.join('?' for _ in keys)+')' if keys is not None else ''
+    store.conn.execute("INSERT OR IGNORE INTO scene_evidence_ids(binding_id) SELECT b.id FROM evidence_bindings b JOIN documents d ON d.id=b.document_id WHERE d.kind='scene'"+selected+' ORDER BY b.id',keys or [])
 
 
 def scene_payload(doc):

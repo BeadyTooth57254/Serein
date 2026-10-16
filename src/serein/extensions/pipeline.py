@@ -224,7 +224,7 @@ def new_batch(database,include_recent,clock=None,*,retry_repair=False):
             store.conn.execute("UPDATE pipeline_batches SET status='superseded_input_budget' WHERE id=?",(old['id'],))
         complete_upload=''
         if store.conn.execute("SELECT 1 FROM sqlite_master WHERE name='file_imports'").fetchone():
-            complete_upload=" AND (json_extract(r.metadata_json,'$.import_upload_id') IS NULL OR json_extract(r.metadata_json,'$.import_upload_id') IN (SELECT id FROM file_imports WHERE cursor=json_array_length(payload_json,'$.entries')))"
+            complete_upload=" AND (json_extract(r.metadata_json,'$.import_upload_id') IS NULL OR json_extract(r.metadata_json,'$.import_upload_id') IN (SELECT id FROM file_imports WHERE cursor=COALESCE(json_extract(payload_json,'$.total'),json_array_length(payload_json,'$.entries'))))"
         import_boundary=" AND NOT EXISTS (SELECT 1 FROM pipeline_import_boundaries b WHERE b.upload_id=json_extract(r.metadata_json,'$.import_upload_id') AND b.released=0) AND NOT EXISTS (SELECT 1 FROM pipeline_image_holds h WHERE h.raw_id=r.id AND h.event_hash=r.event_hash)"
         scopes=store.conn.execute('SELECT DISTINCT r.source,r.session_id FROM raw_events r WHERE NOT EXISTS (SELECT 1 FROM raw_processing p WHERE p.raw_id=r.id)'+complete_upload+import_boundary+' ORDER BY r.id').fetchall()
         for source,session in scopes:
@@ -289,7 +289,8 @@ def _card_is_complete(card):
             and all(isinstance(card.get(key),str) and 0<len(card[key].strip())<=limit
                     for key,limit in (('subject',160),('throughline',600)))
             and card.get('status') in ('active','parked')
-            and card.get('event_policy','default') in ('default','rolling_engineering'))
+            and card.get('event_policy','default') in ('default','rolling_engineering')
+            and card.get('task_status') in (None,'in_progress','blocked','completed'))
 
 
 def _assignment_tracks(data,assignments):
@@ -897,7 +898,7 @@ def prepare_stage_output(request, output):
     top_fields = {'message_assignments', 'track_updates', '_splitter_provider',
                   '_splitter_model', '_splitter_provider_index', '_codex_job'}
     assignment_fields = {'source_message_id', 'primary_track_ref', 'context_track_refs', 'routing_role'}
-    update_fields = {'track_ref', 'subject', 'throughline', 'event_policy', 'status'}
+    update_fields = {'track_ref', 'subject', 'throughline', 'event_policy', 'status', 'task_status'}
     prepared = {key: value for key, value in output.items() if key in top_fields}
     for name, fields in (('message_assignments', assignment_fields), ('track_updates', update_fields)):
         if isinstance(prepared.get(name), list):
@@ -1694,7 +1695,7 @@ async def _flush_routes_frozen(database):
                 "b.id LIKE 'route:%' AND b.status IN ('routing_only','retry_wait') AND "+SCOPE_HEAD+" ORDER BY "+QUEUE_ORDER)]
         upload=''
         if store.conn.execute("SELECT 1 FROM sqlite_master WHERE name='file_imports'").fetchone():
-            upload=" AND (json_extract(r.metadata_json,'$.import_upload_id') IS NULL OR json_extract(r.metadata_json,'$.import_upload_id') IN (SELECT id FROM file_imports WHERE cursor=json_array_length(payload_json,'$.entries')))"
+            upload=" AND (json_extract(r.metadata_json,'$.import_upload_id') IS NULL OR json_extract(r.metadata_json,'$.import_upload_id') IN (SELECT id FROM file_imports WHERE cursor=COALESCE(json_extract(payload_json,'$.total'),json_array_length(payload_json,'$.entries'))))"
         import_boundary=" AND NOT EXISTS (SELECT 1 FROM pipeline_import_boundaries b WHERE b.upload_id=json_extract(r.metadata_json,'$.import_upload_id') AND b.released=0) AND NOT EXISTS (SELECT 1 FROM pipeline_image_holds h WHERE h.raw_id=r.id AND h.event_hash=r.event_hash)"
         # Read cached rows too, so filtering never invents a different unit start.
         rows=[task_message(r) for r in store.conn.execute("SELECT r.* FROM raw_events r WHERE NOT EXISTS (SELECT 1 FROM raw_processing p WHERE p.raw_id=r.id)"+upload+import_boundary+' ORDER BY r.id')]

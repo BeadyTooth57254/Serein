@@ -20,7 +20,7 @@ def curator_task(settings):
     return task
 
 
-def test_router_ignores_extra_fields_but_identifies_missing_track_updates():
+def test_router_ignores_extra_fields_and_inherits_unchanged_tracks():
     messages = [{'id': 11}]
     output = {
         'message_assignments': [{'source_message_id': 11, 'primary_track_ref': 'existing',
@@ -31,8 +31,7 @@ def test_router_ignores_extra_fields_but_identifies_missing_track_updates():
         return normalize_event_track_message_output(output, messages, tracks,
                                                     session_id=1, next_track_ordinal=1)
     output['comment'] = 'extra top-level field'
-    with pytest.raises(ValueError, match=r"missing=\['existing'\], unused=\[\]"):
-        normalize()
+    assert normalize()[1] == [{**tracks[0], 'event_policy': 'default'}]
     output['track_updates'].append({'track_ref': 'existing', 'subject': 'Plan',
                                     'throughline': 'Keep planning', 'status': 'active', 'note': 'extra'})
     assert normalize()[0][0]['primary_track_id'] == 'existing'
@@ -57,12 +56,169 @@ def test_router_extra_fields_are_removed_from_saved_job(settings):
     assert 'note' not in saved['track_updates'][0]
 
 
+def test_router_inherits_context_tracks_without_updating_unused_cards():
+    messages = [{'id': 20283}, {'id': 20322}]
+    tracks = [{'track_id': f'existing:{index}', 'subject': 'Plan',
+               'throughline': 'Continue the plan', 'status': 'parked'} for index in range(127)]
+    output = {'message_assignments': [
+        {'source_message_id': source['id'], 'primary_track_ref': 'new:1',
+         'context_track_refs': ['existing:4'], 'routing_role': 'bridge'} for source in messages],
+        'track_updates': [{'track_ref': 'new:1', 'subject': 'New plan',
+                           'throughline': 'Start planning', 'status': 'active'}]}
+    def normalize():
+        return normalize_event_track_message_output(output, messages, tracks,
+                                                    session_id='current', next_track_ordinal=25)
+    assignments, updates, ordinal = normalize()
+    assert assignments[0]['context_track_ids'] == ['existing:4']
+    assert len(updates) == 2 and ordinal == 26
+    assert updates[1]['subject'] == tracks[4]['subject']
+    output['message_assignments'][0]['source_message_id'] = 1
+    with pytest.raises(ValueError, match='source_message_id=1; expected=20283'):
+        normalize()
+
+
+@pytest.mark.parametrize('patch,expected', [
+    ([], 'in_progress'), ([{'track_ref': 'existing', 'task_status': 'blocked'}], 'blocked'),
+    ([{'track_ref': 'existing', 'task_status': 'completed'}], 'completed'),
+    ([{'track_ref': 'existing', 'task_status': None}], None),
+])
+def test_router_sparse_task_status_preserves_card_and_policy(patch, expected):
+    old = {'track_id': 'existing', 'subject': 'Repair mobile download',
+           'throughline': 'The download request lacks authentication', 'status': 'parked',
+           'event_policy': 'rolling_engineering', 'task_status': 'in_progress'}
+    output = {'message_assignments': [{'source_message_id': 20283, 'primary_track_ref': 'existing',
+                                      'context_track_refs': [], 'routing_role': 'primary_activity'}],
+              'track_updates': patch}
+    _, cards, ordinal = normalize_event_track_message_output(output, [{'id': 20283}], [old],
+                                                             session_id='one', next_track_ordinal=8)
+    assert cards == [{**old, 'task_status': expected}]
+    assert ordinal == 8
+
+
+@pytest.mark.parametrize('patch,error', [
+    ([], 'missing new Tracks'),
+    ([{'track_ref': 'new:1', 'task_status': 'completed'}], 'new Track fields missing'),
+    ([{'track_ref': 'existing', 'subject': ''}], 'bounded subject'),
+    ([{'track_ref': 'existing', 'task_status': 'unknown'}], 'invalid task_status'),
+    ([{'track_ref': 'existing', 'task_status': []}], 'invalid task_status'),
+    ([{'track_ref': 'existing'}, {'track_ref': 'existing'}], 'repeated Track'),
+    ([{'track_ref': 'unused'}], 'unused='),
+])
+def test_sparse_updates_still_reject_incomplete_new_or_invalid_existing_cards(patch, error):
+    cards = [{'track_id': key, 'subject': 'Plan', 'throughline': 'Specific goal', 'status': 'active'}
+             for key in ('existing', 'unused')]
+    ref = 'new:1' if error in ('missing new Tracks', 'new Track fields missing') else 'existing'
+    output = {'message_assignments': [{'source_message_id': 20283, 'primary_track_ref': ref,
+                                      'context_track_refs': [], 'routing_role': 'primary_activity'}],
+              'track_updates': patch}
+    with pytest.raises(ValueError, match=error):
+        normalize_event_track_message_output(output, [{'id': 20283}], cards,
+                                              session_id='one', next_track_ordinal=8)
+
+
+def test_sparse_task_progress_survives_save_next_batch_and_writer_input(settings):
+    writer_statuses = []
+    step = 0
+    async def runner(role, request):
+        output = output_for(role, request)
+        if role == 'track_router':
+            if step == 0:
+                output['track_updates'][0]['task_status'] = 'in_progress'
+            elif step == 1:
+                ref = request['active_tracks'][0]['track_id']
+                assert request['active_tracks'][0]['task_status'] == 'in_progress'
+                output['track_updates'] = [{'track_ref': ref, 'task_status': 'completed'}]
+            else:
+                assert request['active_tracks'][0]['task_status'] == 'completed'
+                output['track_updates'] = []
+        if role == 'event_curator':
+            model_input = latest.event_curator_model_input(request['component'])
+            assert model_input['tracks'][0]['task_status'] == ('in_progress' if step == 0 else 'completed')
+        if role == 'event_writer':
+            cards = latest.materialized_track_cards_payload(request['component']['track_cards'])
+            writer_statuses.append(cards[0]['task_status'])
+        return output
+    for step in range(3):
+        ingest(settings, step + 1)
+        assert asyncio.run(p.advance(settings.database, include_recent=True, runner=runner))['events'] == 1
+        with Store(settings.database, read_only=True) as store:
+            card = json.loads(store.conn.execute('SELECT card_json FROM pipeline_tracks').fetchone()[0])
+            assert card['subject'] == 'Book club' and card['throughline'] == 'Plan book club'
+            assert card['recent_source_message_ids'] == [2 * (step + 1)]
+            assert card['task_status'] == ('in_progress' if step == 0 else 'completed')
+    assert writer_statuses == ['in_progress', 'completed', 'completed']
+
+
+def test_router_api_repair_receives_missing_field_and_preserves_sources(settings, monkeypatch):
+    ingest(settings)
+    save_settings(settings.database, {
+        'models': [{'id': 'local', 'model': 'synthetic', 'base_url': 'http://127.0.0.1:9/v1'}],
+        'assignments': {'track_router': 'local'}})
+    calls = []
+    async def complete(model, payload):
+        with Store(settings.database, read_only=True) as store:
+            request = json.loads(store.conn.execute(
+                "SELECT request_json FROM pipeline_jobs WHERE role LIKE 'track_router%' "
+                "AND output_json IS NULL ORDER BY rowid DESC LIMIT 1").fetchone()[0])
+        calls.append(payload)
+        output = output_for('track_router', request)
+        if len(calls) == 1:
+            del output['message_assignments'][0]['context_track_refs']
+        return {'choices': [{'message': {'content': json.dumps(output)}}]}
+    monkeypatch.setattr('serein.model_runtime.complete', complete)
+    task = asyncio.run(p.advance(settings.database, include_recent=True))
+    assert task['role'] == 'event_curator'
+    assert len(calls) == 2
+    correction = calls[1]['messages'][1]['content']
+    assert 'validation_error' in correction and "fields missing: ['context_track_refs']" in correction
+    with Store(settings.database, read_only=True) as store:
+        accepted = json.loads(store.conn.execute(
+            "SELECT output_json FROM pipeline_jobs WHERE role LIKE 'track_router%'").fetchone()[0])
+        assert [row['source_message_id'] for row in accepted['message_assignments']] == [1, 2]
+        assert [row[0] for row in store.conn.execute('SELECT id FROM raw_events ORDER BY id')] == [1, 2]
+        assert store.conn.execute('SELECT count(*) FROM raw_processing').fetchone()[0] == 0
+
+
+@pytest.mark.parametrize('action,base_count,expected', [
+    ('create', 1, '0'), ('extend', 0, '1'), ('rewrite', 0, '1'),
+    ('merge', 0, 'at least 2'), ('merge', 1, 'at least 2'),
+])
+def test_curator_cardinality_error_identifies_action_and_counts(settings, action, base_count, expected):
+    ingest(settings)
+    asyncio.run(p.advance(settings.database, include_recent=True, runner=synthetic_runner))
+    ingest(settings, 2)
+    task = curator_task(settings)
+    output = output_for('event_curator', task['request'])
+    p.validate(task['request'], output)
+    output['events'][0]['action'] = action
+    output['events'][0]['base_event_ids'] = output['events'][0]['base_event_ids'][:base_count]
+    with pytest.raises(ValueError, match='action/base cardinality is invalid') as error:
+        p.validate(task['request'], output)
+    assert f'action={action!r}, base_count={base_count}, expected={expected}' in str(error.value)
+    assert 'Book club' not in str(error.value)
+
+
 def test_curator_error_identifies_unaccounted_source(settings):
     ingest(settings)
     task = curator_task(settings)
     output = output_for('event_curator', task['request'])
     omitted = output['events'][0]['owned_unit_roots'].pop()
     with pytest.raises(ValueError, match=f'unaccounted source_message_ids=\\[{omitted}\\]'):
+        p.validate(task['request'], output)
+
+
+def test_curator_continuing_track_without_saved_event_uses_one_create(settings):
+    ingest(settings)
+    task = curator_task(settings)
+    component = task['request']['component']
+    assert component['base_event_candidates'] == []
+    output = output_for('event_curator', task['request'])
+    normalized = latest.normalize_event_curator_output(output, component)
+    assert len(normalized['events']) == 1
+    assert normalized['events'][0]['action'] == 'create'
+    assert set(normalized['events'][0]['source_message_ids']) == {message['id'] for message in component['messages']}
+    output['events'][0]['action'] = 'extend'
+    with pytest.raises(ValueError, match="action='extend', base_count=0, expected=1"):
         p.validate(task['request'], output)
 
 

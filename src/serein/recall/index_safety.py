@@ -5,6 +5,7 @@ attempt before work; an interrupted operation requires human recovery rather tha
 replaying a possibly billed request. Nested fills share the outer operation.
 """
 from contextvars import ContextVar
+from contextlib import closing
 from functools import wraps
 import json
 import time
@@ -82,7 +83,7 @@ def _target(settings):
     profile = {}
     if settings.index and settings.index.is_file():
         try:
-            with sqlite3.connect(settings.index.resolve().as_uri() + '?mode=ro', uri=True) as conn:
+            with closing(sqlite3.connect(settings.index.resolve().as_uri() + '?mode=ro', uri=True)) as conn:
                 profile = dict(conn.execute("SELECT key,value FROM settings WHERE key LIKE 'embedding_%'"))
         except sqlite3.Error:
             profile = {'invalid': True}

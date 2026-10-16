@@ -11,6 +11,10 @@ from .core.store import Store, Conflict, digest, encode, now
 from .deployment import identity
 from .compat.germany.raw_events import RawEventStore
 
+DEFAULT_BATCH_SIZE=25
+LARGE_BATCH_SIZE=250
+MAX_BATCH_CHARS=1_000_000
+
 
 def timestamp(value, fallback):
     if value in (None,''):return fallback
@@ -192,6 +196,10 @@ def initialize_imports(database):
                 payload_json TEXT NOT NULL,cursor INTEGER NOT NULL DEFAULT 0,inserted INTEGER NOT NULL DEFAULT 0,
                 duplicate INTEGER NOT NULL DEFAULT 0,errors_json TEXT NOT NULL DEFAULT '[]',created_at TEXT NOT NULL,
                 tagging INTEGER NOT NULL DEFAULT 0);
+            CREATE TABLE IF NOT EXISTS file_import_entries (
+                upload_id TEXT NOT NULL REFERENCES file_imports(id) ON DELETE CASCADE,
+                position INTEGER NOT NULL,entry_json TEXT NOT NULL,
+                PRIMARY KEY(upload_id,position));
             CREATE TABLE IF NOT EXISTS import_tag_jobs (document_id TEXT PRIMARY KEY,body_hash TEXT NOT NULL,upload_id TEXT NOT NULL,
                 status TEXT NOT NULL DEFAULT 'pending',attempts INTEGER NOT NULL DEFAULT 0,error TEXT NOT NULL DEFAULT '');
             CREATE TABLE IF NOT EXISTS tagging_outbox (
@@ -222,12 +230,34 @@ def initialize_imports(database):
                 INSERT OR IGNORE INTO tagging_outbox(document_id) VALUES (NEW.id);
             END;
         ''')
+        # Old uploads are split once, atomically, without changing their cursor,
+        # errors, tagging choice or history boundary. New uploads start split.
+        with store.transaction(immediate=True):
+            columns={row[1] for row in store.conn.execute('PRAGMA table_info(file_imports)')}
+            if 'total' not in columns:
+                store.conn.execute('ALTER TABLE file_imports ADD COLUMN total INTEGER')
+            for row in store.conn.execute('SELECT id FROM file_imports WHERE total IS NULL').fetchall():
+                data=json.loads(store.conn.execute('SELECT payload_json FROM file_imports WHERE id=?',(row['id'],)).fetchone()[0])
+                save_entries(store,row['id'],data)
         marker=store.conn.execute("SELECT 1 FROM background_state WHERE name='tagging_outbox_seeded_v1'").fetchone()
         if not marker:
             store.conn.execute("INSERT OR IGNORE INTO tagging_outbox(document_id) "
                 "SELECT id FROM documents WHERE kind IN ('event','scene') AND lifecycle='active'")
             store.conn.execute("INSERT INTO background_state(name,value_json) VALUES ('tagging_outbox_seeded_v1','{\"status\":\"done\"}')")
         archive_imported_originals(store.conn)
+
+
+def save_entries(store,identifier,data):
+    """Keep the small report separate from the ordered, durable import input."""
+    entries=data['entries']
+    summary={key:value for key,value in data.items() if key!='entries'}
+    summary.update(total=len(entries),sessions=len({item['session_id'] for item in entries}) if data['format']!='operit' else 0,
+        preview=[{'role':item.get('role'),'title':item.get('title'),
+                  'text':item.get('text',item.get('body',''))[:500]} for item in entries[:3]])
+    store.conn.executemany('INSERT INTO file_import_entries(upload_id,position,entry_json) VALUES (?,?,?)',
+        ((identifier,index,encode(item)) for index,item in enumerate(entries)))
+    store.conn.execute('UPDATE file_imports SET total=?,payload_json=? WHERE id=?',
+                       (len(entries),encode(summary),identifier))
 
 
 def archive_imported_originals(conn, upload_id=None):
@@ -263,7 +293,7 @@ def release_imported_originals(database, upload_id, *, skip=False):
         raise ValueError('导入任务 ID 不能为空')
     initialize_imports(database)
     with Store(database) as store,store.transaction(immediate=True):
-        row=store.conn.execute("SELECT id,format,cursor,json_array_length(payload_json,'$.entries') total FROM file_imports WHERE id=?",(identifier,)).fetchone()
+        row=store.conn.execute('SELECT id,format,cursor,total FROM file_imports WHERE id=?',(identifier,)).fetchone()
         if row is None:
             raise ValueError('找不到导入任务')
         if row['format']=='operit':
@@ -285,14 +315,12 @@ def release_imported_originals(database, upload_id, *, skip=False):
 
 
 def report(row):
-    data=json.loads(row['payload_json']);total=len(data['entries']);cursor=row['cursor'];errors=json.loads(row['errors_json'])
+    data=json.loads(row['payload_json']);total=row['total'];cursor=row['cursor'];errors=json.loads(row['errors_json'])
     return {'id':row['id'],'filename':row['filename'],'format':row['format'],'total':total,'processed':cursor,
         'inserted':row['inserted'],'duplicate':row['duplicate'],'failed':len(errors),'errors':errors[:20],
         'status':'completed' if cursor==total else 'ready' if not cursor else 'paused',
         'warnings':data['warnings'],'tagging':bool(row['tagging']),
-        'sessions':len({item['session_id'] for item in data['entries']}) if row['format']!='operit' else 0,
-        'preview':[{'role':item.get('role'),'title':item.get('title'),
-                    'text':item.get('text',item.get('body',''))[:500]} for item in data['entries'][:3]]}
+        'sessions':data['sessions'],'preview':data['preview']}
 
 
 def stage(database,content,filename,mode,tagging):
@@ -307,73 +335,105 @@ def stage(database,content,filename,mode,tagging):
     data=parse_file(content,filename,identity(database),mode)
     if not data['entries']:raise ValueError('文件中没有可导入的文字条目')
     with Store(database) as store,store.transaction(immediate=True):
-        store.conn.execute('INSERT OR IGNORE INTO file_imports (id,filename,format,payload_json,created_at,tagging) VALUES (?,?,?,?,?,?)',
-            (key,Path(filename).name,data['format'],encode(data),now(),int(tagging and data['format']=='operit')))
+        inserted=store.conn.execute('INSERT OR IGNORE INTO file_imports (id,filename,format,payload_json,created_at,tagging) VALUES (?,?,?,?,?,?)',
+            (key,Path(filename).name,data['format'],'{}',now(),int(tagging and data['format']=='operit'))).rowcount
+        if inserted:save_entries(store,key,data)
         return report(store.conn.execute('SELECT * FROM file_imports WHERE id=?',(key,)).fetchone())
 
 
-def import_scene(database,item,upload,data):
-    with Store(database) as store,store.transaction(immediate=True):
-        old=store.read(item['id'])
-        if old:
-            if old['body_md']!=item['body']:raise Conflict('同一 Operit UUID 的正文不同，未覆盖现有记忆')
-            return 'duplicate'
-        meta={'object_kind':'scene','memory_value_source':'imported_original','import_format':'operit','operit_uuid':item['uuid'],
-            'operit_original':item['original'],'import_source_hash':data['source_hash'],'import_source_file':upload['filename'],
-            'operit_export_date':data.get('export_date'),'canonical_domain':'general','domain':['general'],
-            'scene_cues':[],
-            'date':datetime.fromisoformat(item['created_at']).astimezone(timezone(timedelta(hours=8))).date().isoformat(),
-            'scene_status':'active','active':True}
-        store.create(item['id'],'scene',item['title'],item['body'],metadata=meta,
-            created_at=item['created_at'],updated_at=item['updated_at'])
-        source=store.add_source(encode(['operit_memory',item['uuid'] or item['id']]),item['body'],
-            metadata={'type':'operit_memory','item_id':item['uuid'],'source_file':upload['filename'],
-                      'source_system':'operit','message_id':item['uuid'] or item['id'],'session_id':'',
-                      'created_at':item['created_at'],'original':item['original']})
-        store.bind(item['id'],source,actor='import')
-        from .compat.scenes import map_evidence_ids
-        map_evidence_ids(store)
-        store.conn.execute('INSERT INTO index_outbox(document_id) VALUES (?)',(item['id'],))
-        if upload['tagging']:store.conn.execute('INSERT OR IGNORE INTO import_tag_jobs(document_id,body_hash,upload_id) VALUES (?,?,?)',
-            (item['id'],digest(item['body']),upload['id']))
+def import_scene(store,item,upload,data):
+    old=store.read(item['id'])
+    if old:
+        if old['body_md']!=item['body']:raise Conflict('同一 Operit UUID 的正文不同，未覆盖现有记忆')
+        return 'duplicate'
+    meta={'object_kind':'scene','memory_value_source':'imported_original','import_format':'operit','operit_uuid':item['uuid'],
+        'operit_original':item['original'],'import_source_hash':data['source_hash'],'import_source_file':upload['filename'],
+        'operit_export_date':data.get('export_date'),'canonical_domain':'general','domain':['general'],
+        'scene_cues':[],
+        'date':datetime.fromisoformat(item['created_at']).astimezone(timezone(timedelta(hours=8))).date().isoformat(),
+        'scene_status':'active','active':True}
+    store.create(item['id'],'scene',item['title'],item['body'],metadata=meta,
+        created_at=item['created_at'],updated_at=item['updated_at'])
+    source=store.add_source(encode(['operit_memory',item['uuid'] or item['id']]),item['body'],
+        metadata={'type':'operit_memory','item_id':item['uuid'],'source_file':upload['filename'],
+                  'source_system':'operit','message_id':item['uuid'] or item['id'],'session_id':'',
+                  'created_at':item['created_at'],'original':item['original']})
+    store.bind(item['id'],source,actor='import')
+    store.conn.execute('INSERT INTO index_outbox(document_id) VALUES (?)',(item['id'],))
+    if upload['tagging']:store.conn.execute('INSERT OR IGNORE INTO import_tag_jobs(document_id,body_hash,upload_id) VALUES (?,?,?)',
+        (item['id'],digest(item['body']),upload['id']))
     return 'inserted'
 
 
-def advance_import(settings,identifier):
-    initialize_imports(settings.database)
-    with Store(settings.database,read_only=True) as store:
-        row=store.conn.execute('SELECT * FROM file_imports WHERE id=?',(identifier,)).fetchone()
-    if row is None:raise ValueError('找不到导入任务')
-    data=json.loads(row['payload_json']);start=row['cursor'];errors=json.loads(row['errors_json']);counts={'inserted':0,'duplicate':0}
-    archive=ImportArchive({'raw_events':{'db_path':str(settings.database)}}) if row['format']!='operit' else None
-    batch=data['entries'][start:start+25]
+def import_originals(store,archive,batch,identifier,start,errors,counts):
+    normalized=[];stamp=now()
     for offset,item in enumerate(batch):
         try:
-            if archive:
-                item={**item,'metadata':{**item['metadata'],'import_upload_id':identifier}}
-                with Store(settings.database,read_only=True) as store:
-                    old=store.conn.execute('SELECT text,role,created_at FROM raw_events WHERE source=? AND source_event_id=?',
-                        (item['source'],item['source_event_id'])).fetchone()
-                normalized,error=archive._normalize_event(item,default_source=item['source'],ingested_at=now())
-                if normalized is None:raise ValueError('原话不符合归档要求：'+error)
-                if old and (old['text']!=normalized['text'] or old['role']!=item['role']):
-                    raise Conflict('同一原始消息 ID 的内容不同，未覆盖已存原话')
-                if old:status='duplicate'
-                else:
-                    result=archive.ingest([item],source=item['source'])
-                    if result['rejected']:raise ValueError('原话不符合归档要求')
-                    status='inserted' if result['inserted'] else 'duplicate'
-            else:
-                status=import_scene(settings.database,item,row,data)
-                from .recall.passage_layouts import prepare_layouts
-                prepare_layouts(settings, [item['id']])
-            counts[status]+=1
-        except (ValueError,KeyError) as exc:errors.append({'entry':start+offset+1,'message':str(exc)[:250]})
+            item={**item,'metadata':{**item['metadata'],'import_upload_id':identifier}}
+            event,error=archive._normalize_event(item,default_source=item['source'],ingested_at=stamp)
+            if event is None:raise ValueError('原话不符合归档要求：'+error)
+            normalized.append((offset,event))
+        except (ValueError,KeyError) as exc:
+            errors.append({'entry':start+offset+1,'message':str(exc)[:250]})
+    # One indexed query per source, rather than a connection/query per message.
+    sources={}
+    for _,event in normalized:sources.setdefault(event['source'],[]).append(event['source_event_id'])
+    existing={}
+    for source,keys in sources.items():
+        placeholders=','.join('?' for _ in keys)
+        for old in store.conn.execute('SELECT source,source_event_id,text,role FROM raw_events '
+                f"WHERE source=? AND source_event_id != '' AND source_event_id IN ({placeholders})",(source,*keys)):
+            existing[(old['source'],old['source_event_id'])]=old
+    for offset,event in normalized:
+        key=(event['source'],event['source_event_id']);old=existing.get(key)
+        if old and (old['text']!=event['text'] or old['role']!=event['role']):
+            errors.append({'entry':start+offset+1,'message':'同一原始消息 ID 的内容不同，未覆盖已存原话'})
+            continue
+        if old:status='duplicate'
+        else:
+            status,_=archive._insert_event_on_connection(store.conn,event)
+            if status=='inserted':existing[key]=event
+        counts[status]+=1
+
+
+def advance_import(settings,identifier,*,batch_size=DEFAULT_BATCH_SIZE):
+    if type(batch_size) is not int or not 1<=batch_size<=LARGE_BATCH_SIZE:
+        raise ValueError(f'batch_size must be 1..{LARGE_BATCH_SIZE}')
+    initialize_imports(settings.database)
+    # Schema setup is outside the write transaction; row inserts below reuse it.
+    archive=ImportArchive({'raw_events':{'db_path':str(settings.database)}})
     with Store(settings.database) as store,store.transaction(immediate=True):
-        archive_imported_originals(store.conn,identifier)
-        store.conn.execute('UPDATE file_imports SET cursor=?,inserted=inserted+?,duplicate=duplicate+?,errors_json=? WHERE id=? AND cursor=?',
-            (start+len(batch),counts['inserted'],counts['duplicate'],encode(errors),identifier,start))
-        return report(store.conn.execute('SELECT * FROM file_imports WHERE id=?',(identifier,)).fetchone())
+        row=store.conn.execute('SELECT * FROM file_imports WHERE id=?',(identifier,)).fetchone()
+        if row is None:raise ValueError('找不到导入任务')
+        data=json.loads(row['payload_json']);start=row['cursor'];errors=json.loads(row['errors_json'])
+        counts={'inserted':0,'duplicate':0};batch=[];chars=0
+        for entry in store.conn.execute('SELECT position,entry_json FROM file_import_entries '
+                'WHERE upload_id=? AND position>=? ORDER BY position LIMIT ?', (identifier,start,batch_size)):
+            if entry['position']!=start+len(batch):raise ValueError('导入条目缺失，未推进进度')
+            size=len(entry['entry_json'])
+            if batch and chars+size>MAX_BATCH_CHARS:break
+            batch.append(json.loads(entry['entry_json']));chars+=size
+        if start<row['total'] and not batch:raise ValueError('导入条目缺失，未推进进度')
+        if row['format']!='operit':
+            import_originals(store,archive,batch,identifier,start,errors,counts)
+            if counts['inserted']:
+                store.conn.execute('INSERT OR IGNORE INTO pipeline_import_boundaries(upload_id) VALUES (?)',(identifier,))
+        else:
+            for offset,item in enumerate(batch):
+                try:
+                    with store.transaction():
+                        status=import_scene(store,item,row,data)
+                    counts[status]+=1
+                except (ValueError,KeyError) as exc:
+                    errors.append({'entry':start+offset+1,'message':str(exc)[:250]})
+            from .compat.scenes import map_evidence_ids
+            map_evidence_ids(store,[item['id'] for item in batch if 'id' in item])
+            from .recall.passage_layouts import prepare_layouts
+            prepare_layouts(settings,[item['id'] for item in batch if 'id' in item],store=store)
+        store.conn.execute('UPDATE file_imports SET cursor=?,inserted=inserted+?,duplicate=duplicate+?,errors_json=? WHERE id=?',
+            (start+len(batch),counts['inserted'],counts['duplicate'],encode(errors),identifier))
+        return {**report(store.conn.execute('SELECT * FROM file_imports WHERE id=?',(identifier,)).fetchone()),
+                'batch_processed':len(batch)}
 
 
 def list_imports(database):

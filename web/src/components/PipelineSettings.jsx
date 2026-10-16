@@ -12,6 +12,8 @@ export function PipelineSettings({onOpenSummary}) {
   const holds=work?.blocked_scopes||[];
   const repairHold=holds.find(item=>item.hold_status==='needs_repair');
   const needsRepair=work?.status==='needs_repair'||work?.result?.status==='needs_repair'||Boolean(repairHold);
+  const repairInfo=repairHold||(work?.result?.status==='needs_repair'?work.result:work);
+  const runtimeContractRepair=needsRepair&&repairInfo?.repair_kind==='runtime_contract';
   const failure=work?.error||(needsRepair?work?.result?.reason:'');
   const candidateOverflows=work?.result?.candidate_overflow_deferrals||[];
   const curatorOmissions=work?.result?.curator_omission_deferrals||[];
@@ -49,10 +51,10 @@ export function PipelineSettings({onOpenSummary}) {
   },[]);
   async function next() {
     if(busy||running)return;
-    setBusy(true);setStatus(needsRepair?'正在请求重新校验归线材料…':'正在提交后台整理任务…');
+    setBusy(true);setStatus(runtimeContractRepair?'正在请求继续整理其他聊天；旧计划仍等待明确重建…':needsRepair?'正在请求重新校验归线材料…':'正在提交后台整理任务…');
     try {
       const result=await call('next',{include_recent:true});accept(result);setOutput('');
-      setStatus('后台任务已提交，可离开页面；已完成步骤会保留。');
+      setStatus(runtimeContractRepair?'已提交继续请求；版本变化的旧计划仍需明确重建，其他可处理聊天继续。':'后台任务已提交，可离开页面；已完成步骤会保留。');
     }catch(error){setStatus(error.message);}finally{setBusy(false);}
   }
   function beginRebuild(batchId) {
@@ -139,19 +141,19 @@ export function PipelineSettings({onOpenSummary}) {
         图片 {image.sha256.slice(0,8)} 转录失败三次，已暂停自动重试；依赖它的原话仍保留。
         <button type="button" disabled={busy||running} onClick={()=>retryImage(image.sha256)}>重试这张图片</button></p>)}
       {holds.filter(item=>item.hold_status!=='paused_failure').map(item=><p className="import-error" key={item.batch_id}>
-        聊天 <code>{item.scope}</code>：{item.hold_status==='needs_repair'?'归线证据待修复':item.hold_status==='retry_wait'?'等待有限重试':'归线尚未完成'}。{item.reason}
+        聊天 <code>{item.scope}</code>：{item.hold_status==='needs_repair'?(item.repair_kind==='runtime_contract'?'旧计划版本已变化':'归线证据待修复'):item.hold_status==='retry_wait'?'等待有限重试':'归线尚未完成'}。{item.repair_kind==='runtime_contract'?'重新校验不会迁移旧计划；请先查看重建确认。':item.reason}
         {item.next_retry_at&&<> 下次重试：{new Date(item.next_retry_at).toLocaleString()}。</>}
         {' '}原文保留，此聊天按序等待，其他聊天可继续；当日尚未全部结算。
         {item.hold_status==='needs_repair'&&<button type="button" disabled={busy||running} onClick={()=>beginRebuild(item.batch_id)}>查看重建确认</button>}
       </p>)}
       {(work.paused_batches||[]).map(batch=><p className="import-error" key={batch.batch_id}>本批已暂停：{batch.reason}。同一聊天的后续整理等待它恢复，其他聊天可继续。<button type="button" disabled={busy||running} onClick={()=>retryBatch(batch.batch_id)}>重试此批次</button></p>)}
       {failure&&<p className="import-error">{needsRepair?'待修复原因':'失败原因'}：{failure}</p>}
-      {needsRepair&&<p>批次：<code>{repairHold?.batch_id||work.result?.batch_id||work.batch_id}</code>。原话与已完成步骤保留。先重新校验以恢复历史归线；无法恢复时，可明确作废本批计划并重新归线。不会跳过原话或删除已保存的 Event。</p>}
+      {needsRepair&&<p>批次：<code>{repairHold?.batch_id||work.result?.batch_id||work.batch_id}</code>。原话与已完成步骤保留。{runtimeContractRepair?'当前程序与冻结旧计划的版本不一致，重新校验不会迁移旧计划。请查看重建确认，明确同意后才重新归线；也可继续整理其他聊天。':'先重新校验以恢复历史归线；无法恢复时，可明确作废本批计划并重新归线。'}不会跳过原话或删除已保存的 Event。</p>}
       {task&&<p>等待 {stages[task.role]||task.role}：下载任务交给 Agent，再提交返回的 JSON。</p>}</div>}
     {work?.attempts?.length>0&&<details><summary>模型返回与纠错记录</summary>{work.attempts.map(item=><p key={item.id}>
       第 {item.attempt} 次：{item.error||'校验通过'} · {item.output_chars} 字符 <button type="button" onClick={()=>downloadAttempt(item.id)}>下载返回</button></p>)}</details>}
-    <div className="settings-actions"><button type="button" disabled={busy||running} onClick={next}>{running?'后台整理中…':needsRepair?'重新校验并继续':'继续整理'}</button>
-      {needsRepair&&<button type="button" disabled={busy||running} onClick={beginRebuild}>作废本批计划并重新归线</button>}
+    <div className="settings-actions"><button type="button" disabled={busy||running} onClick={next}>{running?'后台整理中…':runtimeContractRepair?'继续整理其他聊天':needsRepair?'重新校验并继续':'继续整理'}</button>
+      {needsRepair&&<button type="button" disabled={busy||running} onClick={beginRebuild}>{runtimeContractRepair?'查看重建确认':'作废本批计划并重新归线'}</button>}
       {task&&<button type="button" onClick={download}>下载 agent 任务</button>}</div>
     {task&&<><label className="settings-field"><span>Agent 返回的 JSON</span><textarea rows={8} value={output} onChange={event=>setOutput(event.target.value)}/></label>
       <div className="settings-actions"><button type="button" disabled={busy||!output.trim()} onClick={submit}>提交并校验</button></div></>}

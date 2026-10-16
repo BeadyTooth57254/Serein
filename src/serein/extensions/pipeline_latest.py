@@ -93,11 +93,13 @@ def event_track_message_payload(messages: list[dict[str, Any]], snowflake_messag
 def build_event_track_message_prompt(date_view: str, block_messages: list[dict[str, Any]], active_tracks: list[dict[str, Any]], snowflake_message_ids: set[int] | None=None, recent_context_messages: list[dict[str, Any]] | None=None, *, include_role_rules: bool=True) -> str:
     prompt_tracks = []
     for track in active_tracks:
-        item = {key: track.get(key) for key in ('track_id', 'subject', 'throughline', 'status', 'recent_turns') if track.get(key) not in (None, '', [])}
+        item = {key: track.get(key) for key in ('track_id', 'subject', 'throughline', 'status', 'task_status', 'recent_turns') if track.get(key) not in (None, '', [])}
         item['event_policy'] = str(track.get('event_policy') or 'default')
         prompt_tracks.append(item)
+    source_ids = [int(message['id']) for message in block_messages]
+    example_source_id = source_ids[0] if source_ids else None
     agent_rules = materialize_agent_rules('track_router') if include_role_rules else ''
-    return f'[memory_phase: event_track_router_v2]\n日期范围：{date_view}（Asia/Shanghai；二十分钟只触发 flush，不是语义边界）\n\n{agent_rules}\n\n逐条路由原始消息。只返回：\n{{"message_assignments":[{{"source_message_id":1,"primary_track_ref":"new:1","context_track_refs":[],"routing_role":"primary_activity"}}],"track_updates":[{{"track_ref":"new:1","subject":"具体对象或事项","throughline":"这段经历的最小续接线索","event_policy":"default","status":"active"}}]}}\n\nrouting_role 可选 origin、primary_activity、landing、bridge、routine；event_policy 可选 default、rolling_engineering；status 可选 active、parked。每条 source_message 必须按原顺序恰好出现一次。每个实际使用的 Track 必须在 track_updates 恰好出现一次。新 Track 使用 new:1、new:2……。\nactive_tracks_json 只给配置回看天数内实际归入过原话的 Track，不依赖聊天窗口身份。bounded_recent_context_json 最多包含当前 session 在本批之前的六条可见原文，不得为它输出 assignment。\n只有原文表明已围绕同一个明确建设目标开展实施、排障或验证，且仍需接续这项工作，才使用 rolling_engineering；设想、未来建议或同产品关联不够。其余使用 default。已有 rolling_engineering 只能继承，不能降级。\n\n<active_tracks_json>\n{json.dumps(prompt_tracks, ensure_ascii=False, separators=(',', ':'))}\n</active_tracks_json>\n\n<raw_messages_json>\n{json.dumps(event_track_message_payload(block_messages, snowflake_message_ids), ensure_ascii=False, separators=(',', ':'))}\n</raw_messages_json>\n\n<bounded_recent_context_json>\n{json.dumps(event_track_message_payload(recent_context_messages or [], snowflake_message_ids), ensure_ascii=False, separators=(',', ':'))}\n</bounded_recent_context_json>\n'
+    return f'[memory_phase: event_track_router_v2]\n日期范围：{date_view}（Asia/Shanghai；二十分钟只触发 flush，不是语义边界）\n\n{agent_rules}\n\n逐条路由原始消息。只返回：\n{{"message_assignments":[{{"source_message_id":{json.dumps(example_source_id)},"primary_track_ref":"new:1","context_track_refs":[],"routing_role":"primary_activity"}}],"track_updates":[{{"track_ref":"new:1","subject":"具体对象或事项","throughline":"这段经历的最小续接线索","event_policy":"default","status":"active","task_status":null}}]}}\n\nrouting_role 可选 origin、primary_activity、landing、bridge、routine；event_policy 可选 default、rolling_engineering；status 可选 active、parked。本批 source_message_id 按输入顺序为 {json.dumps(source_ids)}，message_assignments 必须恰好有 {len(source_ids)} 项。source_message_id 必须照抄 raw_messages_json 的真实编号，绝不能填第几条消息的位置序号。每项都必须包含 context_track_refs，没有 context 时也必须返回 []。track_updates 只返回被引用 Track 中有变化的字段；已有 Track 可完全省略更新，或只返回 track_ref 和需要修改的字段，省略字段继承输入卡片；新 Track 必须提供 subject、throughline、status，event_policy 默认 default。未被引用的 Track 不输出更新。任务进度单独放在可选 task_status：in_progress、blocked、completed 或 null；普通交流或没有明确任务进度依据时留空。已有任务状态无新依据就省略继承；明确不适用时可设 null。status 仍只允许 active、parked，表示话题线活跃程度。task_status 不改变原话归属、Event 边界或是否结算。新 Track 只使用 new:1、new:2……，已有 Track 照抄 active_tracks_json 的完整 track_id，不自行生成持久编号。\nactive_tracks_json 只给配置回看天数内实际归入过原话的 Track，不依赖聊天窗口身份。bounded_recent_context_json 最多包含当前 session 在本批之前的六条可见原文，不得为它输出 assignment。\n只有原文表明已围绕同一个明确建设目标开展实施、排障或验证，且仍需接续这项工作，才使用 rolling_engineering；设想、未来建议或同产品关联不够。其余使用 default。已有 rolling_engineering 只能继承，不能降级。\n\n<active_tracks_json>\n{json.dumps(prompt_tracks, ensure_ascii=False, separators=(',', ':'))}\n</active_tracks_json>\n\n<raw_messages_json>\n{json.dumps(event_track_message_payload(block_messages, snowflake_message_ids), ensure_ascii=False, separators=(',', ':'))}\n</raw_messages_json>\n\n<bounded_recent_context_json>\n{json.dumps(event_track_message_payload(recent_context_messages or [], snowflake_message_ids), ensure_ascii=False, separators=(',', ':'))}\n</bounded_recent_context_json>\n'
 
 def event_curator_model_input(component: dict[str, Any], snowflake_message_ids: set[int] | None=None) -> dict[str, Any]:
     """Materialize one non-redundant unit-level view for the semantic Curator."""
@@ -149,7 +151,7 @@ def event_curator_model_input(component: dict[str, Any], snowflake_message_ids: 
             base['extend_material_mode'] = 'new_sources_only' if inherited is not None else 'full_sources'
             base['inherited_materials'] = inherited
         base_events.append(base)
-    tracks = [{'track_id': str(card.get('track_id') or ''), 'subject': str(card.get('subject') or ''), 'throughline': str(card.get('throughline') or ''), 'event_policy': str(card.get('event_policy') or 'default')} for card in component.get('track_cards') or []]
+    tracks = [{'track_id': str(card.get('track_id') or ''), 'subject': str(card.get('subject') or ''), 'throughline': str(card.get('throughline') or ''), 'event_policy': str(card.get('event_policy') or 'default'), **({'task_status': card['task_status']} if 'task_status' in card else {})} for card in component.get('track_cards') or []]
     return {'context_request_scope': {'track_ids': list(component.get('track_ids') or []), 'before_message_id': min(stable_ids), 'session_ids': [int(item) for item in component.get('context_session_ids') or []]}, 'tracks': tracks, 'units': units, 'base_events': base_events,
             'continuity_pairs': list(component.get('continuity_pairs') or []),
             'unreviewed_continuity_pairs': list(component.get('unreviewed_continuity_pairs') or [])}
@@ -222,7 +224,9 @@ def build_event_track_curator_prompt(date_view: str, component: dict[str, Any], 
             f'{json.dumps(format_hint, ensure_ascii=False)}\n\n'
             '只选择 scope=stable 的完整 unit。每个 stable unit 必须恰好进入 Event、skip 或 defer；只有 Router 声明的 bridge 可共享。'
             'parked/context_only 只可阅读。extend/rewrite/merge 只填写 base_event_ids，host 保留原文并集。'
-            '普通接续用 extend，Writer 仅写新增段落；只有必须整篇重新组织时才显式用 rewrite（一条 base），合并多条 base 用 merge。'
+            'action 与 base_event_ids 数量必须匹配：create 为 0，extend/rewrite 恰好为 1，merge 至少为 2；base 只能从输入的 base_events 选择。'
+            'extend 只接续输入 base_events 中某一条已保存 Event，base_event_ids 必须恰好填写该 Event 的 event_id；同一 Track 的后续消息不等于 extend。base_events 为空时，拟议 Event 只能用 create，不能用 extend 加空 base。当前 events 数组内刚提出的 create 也不能作为 base；若后续 unit 仍属同一段活动，合入同一个 Event 的 owned_unit_roots，独立活动则分别 create。'
+            '接续已保存 Event 时 Writer 仅写新增段落；只有必须整篇重新组织时才显式用 rewrite（一条 base），合并多条已保存 base 用 merge。'
             'parked 直接纠正紧邻 stable 结果时 defer；无关 parked 不影响已落定材料。'
             'rolling_engineering 逐条核对实际建设，相关 base 全选；受保护前版仍拟议 extend/merge，由 host 按冻结配置检查能否原文后追加，否则暂缓。\n'
             '整个 corridor 缺少对象、起因或被纠正旧主张时可一次返回 context_request；它与 Event 决定严格二选一，'
@@ -505,7 +509,10 @@ def _normalize_expanded_event_curator_output(output: dict[str, Any], component: 
             base_event_ids.append(base_event_id)
         required_base_count = {'create': 0, 'extend': 1, 'rewrite': 1}.get(action)
         if required_base_count is not None and len(base_event_ids) != required_base_count or (action == 'merge' and len(base_event_ids) < 2):
-            raise ValueError('Track Curator Event action/base cardinality is invalid')
+            expected = str(required_base_count) if required_base_count is not None else 'at least 2'
+            raise ValueError(
+                f'Track Curator Event action/base cardinality is invalid: '
+                f'action={action!r}, base_count={len(base_event_ids)}, expected={expected}')
         selected_candidates: list[dict[str, Any]] = []
         for base_event_id in base_event_ids:
             candidate = base_candidate_lookup.get(base_event_id)
@@ -696,12 +703,14 @@ def event_reading_block_payload(messages: list[dict[str, Any]], context_messages
         item['activity_role'] = activity_roles.get(int(item['source_message_id']), 'primary_activity')
     return payload
 
-def materialized_track_cards_payload(track_cards: list[dict[str, Any]] | None) -> list[dict[str, str]]:
-    cards: list[dict[str, str]] = []
+def materialized_track_cards_payload(track_cards: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    cards: list[dict[str, Any]] = []
     for raw in track_cards or []:
         if not isinstance(raw, dict):
             raise ValueError('track_cards must contain objects')
         card = {'track_id': str(raw.get('track_id') or '').strip(), 'subject': ' '.join(str(raw.get('subject') or '').split()), 'throughline': ' '.join(str(raw.get('throughline') or '').split())}
+        if 'task_status' in raw:
+            card['task_status'] = raw['task_status']
         cards.append(card)
     return cards
 
