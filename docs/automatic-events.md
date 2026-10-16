@@ -163,3 +163,16 @@ create、rewrite、merge 保持完整 owned 来源标注；不会为了减少标
 
 未完成任务仍受 runtime revision 校验保护：升级后旧协议请求被保留为历史并重新领取未结算原话，
 不会拿新材料范围解释旧的冻结输出；已完成 Event 不会重写。新协议中断后续跑使用同一冻结快照。
+
+
+## Track 卡片更新与任务进度
+
+Router 仍须按顺序完整覆盖本批原始消息；已有 Track 的 `track_updates` 可省略，或只给 `track_ref` 与需要改变的字段。省略字段继承本轮输入卡片，新 Track 仍须提供完整 `subject`、`throughline`、`status`，`event_policy` 默认 `default`。程序会为所有被引用的主线及 context Track 刷新最近消息，保留原有工程策略的继承规则。未知引用、漏掉原话、重复更新、未被引用的更新以及不完整的新 Track 仍会被拒绝。
+
+`status=active/parked` 表示话题线活跃程度；可选 `task_status=in_progress/blocked/completed` 表示明确任务的进度，普通交流留空。已有任务状态在字段省略时保留，显式 `null` 清空；原文没有新依据时不推断变化，不从旧卡片文字批量提取状态。进度不是 Event admission、归属或边界依据。
+
+`subject` 标识稳定事项，`throughline` 保留续接需要的触发点和事实；当前状态摘要放在参数中。Writer 正文不追加“当前状态／完成情况／待办／下一步”栏目，但原文明说且影响经历的完成、失败、等待、暂停仍作为当时事实保留。已有 Event 正文不会被升级自动重写。
+
+此变化沿用既有运行版本检查：升级不会自动迁移或作废未完成的旧计划。版本不匹配的批次仍先核对状态，再走已有的重建确认流程。
+
+Curator 的 extend 专指接续输入候选中某条已保存 Event，必须选一个 base；同一 Track 的后续消息、当前返回中刚提出的 create 都不构成 base。候选为空时只能提出 create；同一活动的多个 unit 应一起归入同一个拟议 Event，独立活动分别 create。程序不把 extend + 空 base 自动改成 create。

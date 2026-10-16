@@ -289,7 +289,8 @@ def _card_is_complete(card):
             and all(isinstance(card.get(key),str) and 0<len(card[key].strip())<=limit
                     for key,limit in (('subject',160),('throughline',600)))
             and card.get('status') in ('active','parked')
-            and card.get('event_policy','default') in ('default','rolling_engineering'))
+            and card.get('event_policy','default') in ('default','rolling_engineering')
+            and card.get('task_status') in (None,'in_progress','blocked','completed'))
 
 
 def _assignment_tracks(data,assignments):
@@ -897,7 +898,7 @@ def prepare_stage_output(request, output):
     top_fields = {'message_assignments', 'track_updates', '_splitter_provider',
                   '_splitter_model', '_splitter_provider_index', '_codex_job'}
     assignment_fields = {'source_message_id', 'primary_track_ref', 'context_track_refs', 'routing_role'}
-    update_fields = {'track_ref', 'subject', 'throughline', 'event_policy', 'status'}
+    update_fields = {'track_ref', 'subject', 'throughline', 'event_policy', 'status', 'task_status'}
     prepared = {key: value for key, value in output.items() if key in top_fields}
     for name, fields in (('message_assignments', assignment_fields), ('track_updates', update_fields)):
         if isinstance(prepared.get(name), list):
