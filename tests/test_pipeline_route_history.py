@@ -257,6 +257,78 @@ def test_confirmed_rebuild_exits_hold_preserves_records_and_avoids_bad_cache(set
         asyncio.run(recovery.rebuild(settings.database, batch['id'], 'REBUILD_PIPELINE_BATCH'))
 
 
+@pytest.mark.parametrize('route_only', [False, True])
+def test_confirmed_history_reset_survives_next_windows_in_both_scopes(settings, route_only):
+    from serein.compat.raw_archive import raw_archive
+    tracks=p.track_state
+    archive=raw_archive(settings)
+    def add(session, day, workspace):
+        return archive.ingest([{'source_event_id':f'{session}-{day}-{role}',
+            'session_id':session,'role':role,'text':f'Synthetic book plan {day} {role}',
+            'created_at':f'2025-01-{day:02}T00:0{index}:00Z',
+            'metadata':{'workspace_root':workspace}}
+            for index,role in enumerate(('user','assistant'))],source='test')
+    # Legacy cross-window cards have routes but no bounded accepted frames.
+    add('b',1,'one');add('a',1,'two')
+    p.initialize(settings.database)
+    scopes={session:tracks.scope_for('test',session) for session in ('a','b')}
+    with Store(settings.database) as store:
+        for session,ids in [('b',[1,2]),('a',[3,4])]:
+            key='session_'+scopes[session]+'_track_0042'
+            tracks.persist(store.conn,[{'track_id':key,'subject':'Legacy book plan',
+                'throughline':'FUTURE LEGACY TEXT MUST NOT ENTER ROUTER',
+                'status':'active','event_policy':'rolling_engineering',
+                'recent_source_message_ids':[999]}],scopes[session])
+            for raw_id in ids:
+                store.conn.execute('INSERT INTO pipeline_routes VALUES (?,?)',(raw_id,encode({
+                    'source_message_id':raw_id,'primary_track_id':key,
+                    'context_track_ids':[],'routing_role':'primary_activity'})))
+                store.conn.execute("INSERT INTO raw_processing VALUES (?,'old','settled')",(raw_id,))
+    add('a',2,'one');add('b',2,'two')
+    for _ in range(2):
+        result=asyncio.run(p.advance(settings.database,include_recent=True,runner=synthetic_runner))
+        assert result['status']=='needs_repair' and 'No bounded historical' in result['reason']
+    with Store(settings.database,read_only=True) as store:
+        held=[dict(row) for row in store.conn.execute("SELECT * FROM pipeline_batches WHERE status='needs_repair'")]
+    if route_only:
+        with Store(settings.database) as store:
+            for batch in held:
+                new_id='route:'+batch['id']
+                store.conn.execute('UPDATE pipeline_batches SET id=? WHERE id=?',(new_id,batch['id']))
+                batch['id']=new_id
+    for batch in held:
+        rebuilt=asyncio.run(recovery.rebuild(settings.database,batch['id'],'REBUILD_PIPELINE_BATCH'))
+        async def cold(role,request):
+            if role=='track_router':assert request['active_tracks']==[]
+            assert 'FUTURE LEGACY TEXT' not in request['prompt']
+            return output_for(role,request)
+        result=asyncio.run(p.advance(settings.database,include_recent=True,runner=cold))
+        assert result['status']=='routed' if route_only else result['events']==1
+        with Store(settings.database,read_only=True) as store:
+            data=json.loads(store.conn.execute('SELECT input_json FROM pipeline_batches WHERE id=?',
+                                               (rebuilt['batch_id'],)).fetchone()[0])
+            if not route_only:assert data['task_snapshot_compacted']
+            assert data['recovery_downgrade']['history_before_id'] in (5,7)
+            assert data['routing_result']['tracks'][0]['track_id'].endswith('_0043')
+    if route_only:
+        # Settlement reuses the new daytime proof, without needing legacy cards.
+        for _ in range(2):
+            result=asyncio.run(p.advance(settings.database,include_recent=True,runner=synthetic_runner))
+            assert result['events']==1 and result['processed_originals']==2
+    # The next window used to rediscover the unchanged missing historical card.
+    add('a',3,'one');add('b',3,'two')
+    for _ in range(2):
+        result=asyncio.run(p.advance(settings.database,include_recent=True,runner=synthetic_runner))
+        assert result['events']==1 and result['processed_originals']==2
+    with Store(settings.database,read_only=True) as store:
+        assert store.conn.execute('SELECT count(*) FROM raw_processing').fetchone()[0]==12
+        assert store.conn.execute("SELECT count(*) FROM pipeline_tracks WHERE id LIKE '%_0042'").fetchone()[0]==2
+    # A scope with no explicit reset still fails closed on the old history.
+    add('unconfirmed',3,'one')
+    result=asyncio.run(p.advance(settings.database,include_recent=True,runner=synthetic_runner))
+    assert result['status']=='needs_repair' and 'No bounded historical' in result['reason']
+
+
 def test_rebuild_http_auth_confirm_target_and_busy_lease(settings):
     ingest(settings)
     batch, _ = hold_bad_cache(settings)

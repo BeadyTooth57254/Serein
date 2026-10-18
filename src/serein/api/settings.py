@@ -220,6 +220,7 @@ class PipelinePatch(BaseModel):
     track_candidates_enabled: bool | None = Field(default=None,strict=True)
     track_direct_hours: Literal[12,24,48,72] | None = None
     track_candidate_limit: int | None = Field(default=None,ge=1,le=50,strict=True)
+    router_compact_cards: bool | None = Field(default=None,strict=True)
     joint_review_enabled: bool | None = None
     material_review_enabled: bool | None = None
     round_gate_enabled: bool | None = None

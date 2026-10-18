@@ -49,12 +49,23 @@ def load_tracks(store, source, session, before_id, message, *, lookback_days=3):
     lower=reference-timedelta(days=lookback_days)
     metadata=json.loads(current['metadata_json'] or '{}')
     boundary=(metadata.get('runtime',''),metadata.get('workspace_root',''))
+    scope=scope_for(source,session)
+    # Only a successfully published explicit rebuild can retire earlier
+    # unprovable history, and only for its own scope.
+    cutoff=store.conn.execute("SELECT MAX(CAST(json_extract(old.result_json,"
+        "'$.recovery_downgrade.history_before_id') AS INTEGER)) FROM pipeline_batches old "
+        "JOIN pipeline_batches fresh ON fresh.id=json_extract(old.result_json,'$.replacement_batch_id') "
+        "WHERE old.scope=? AND old.status='superseded_repair' AND fresh.status IN ('routed','done') AND "
+        "CAST(json_extract(old.result_json,'$.recovery_downgrade.history_before_id') AS INTEGER)<=? AND "
+        "json_extract(old.result_json,'$.recovery_downgrade.confirmed_by')='REBUILD_PIPELINE_BATCH'",
+        (scope,before_id)).fetchone()[0] or 0
     anchors={}
     rows=store.conn.execute('SELECT r.*,p.route_json FROM pipeline_routes p JOIN raw_events r ON r.id=p.raw_id '
         'WHERE r.source=? AND r.id<? AND julianday(r.created_at)>=julianday(?) '
         'AND julianday(r.created_at)<=julianday(?) ORDER BY r.id DESC',
         (source,before_id,lower.isoformat(),reference.isoformat()))
     for row in rows:
+        if row['id'] < cutoff:continue
         stamp=datetime.fromisoformat(row['created_at'].replace('Z','+00:00'))
         if stamp.tzinfo is None:stamp=stamp.replace(tzinfo=timezone.utc)
         if not lower<=stamp.astimezone(timezone.utc)<=reference:continue
@@ -65,7 +76,6 @@ def load_tracks(store, source, session, before_id, message, *, lookback_days=3):
             previous=anchors.get(track_id)
             if previous is None or (stamp,row['id'])>(previous[0],previous[1]['id']):
                 anchors[track_id]=(stamp,row)
-    scope=scope_for(source,session)
     cards=[]
     for row in store.conn.execute('SELECT id,card_json,scope FROM pipeline_tracks ORDER BY id'):
         anchor=anchors.get(row['id'])

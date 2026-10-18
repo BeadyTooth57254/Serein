@@ -332,10 +332,20 @@ def _rebuild(database, batch_id):
             store.conn.execute('DELETE FROM pipeline_route_provenance WHERE raw_id=?', (frozen['id'],))
         # Retain only the original pre-routing input, never old ownership/plans.
         fresh = {key: deepcopy(data[key]) for key in ('contract', 'runtime_revision', 'input_policy', 'messages', 'parked',
-                 'routing_messages', 'tracks', 'scope', 'source', 'recent', 'day') if key in data}
+                 'routing_messages', 'tracks', 'scope', 'source', 'recent', 'day', 'recovery_downgrade') if key in data}
         fresh['contract'] = p.CONTRACT
         fresh['runtime_revision'] = p.runtime_revision()
         fresh['tracks'] = [c for c in fresh['tracks'] if p._card_is_complete(c)]
+        previous_result = json.loads(batch['result_json'] or '{}')
+        history_error = data.get('routing_evidence_error') or previous_result.get('reason', '')
+        if data.get('routing_evidence_error') or 'No bounded historical pre-routing Track frame:' in history_error:
+            # The existing explicit rebuild starts a new history segment for
+            # this scope. Later windows must not reintroduce the same gap.
+            fresh['tracks'] = []
+            fresh['recent'] = []
+            fresh['recovery_downgrade'] = {'reason': history_error,
+                'history_before_id': min(m['id'] for m in routing),
+                'confirmed_by': 'REBUILD_PIPELINE_BATCH', 'source_batch_id': batch_id}
         fresh['next_track_ordinal'] = max(data.get('next_track_ordinal', 1),
                                          tracks.next_ordinal(data['scope'], reserved))
         fresh['ignore_route_cache'] = True
@@ -344,8 +354,10 @@ def _rebuild(database, batch_id):
         route_only=batch_id.startswith('route:')
         replacement = ('route:' if route_only else 'pipeline:')+digest(encode([batch_id, uuid4().hex]))
         audit = {'status': 'superseded_repair', 'replacement_batch_id': replacement,
-                 'confirmed_at': now(), 'previous_result': json.loads(batch['result_json'] or '{}'),
+                 'confirmed_at': now(), 'previous_result': previous_result,
                  'discarded_route_cache': cache}
+        if fresh.get('recovery_downgrade'):
+            audit['recovery_downgrade'] = fresh['recovery_downgrade']
         store.conn.execute("UPDATE pipeline_batches SET status='superseded_repair',result_json=? WHERE id=?",
                            (encode(audit), batch_id))
         store.conn.execute('INSERT INTO pipeline_batches(id,scope,input_json,status) VALUES (?,?,?,?)',

@@ -48,7 +48,7 @@ def _writer_materials(request):
 def _active_details(database):
     with Store(database, read_only=True) as store:
         return [dict(row) for row in store.conn.execute(
-            'SELECT e.item_id,e.fingerprint,e.body,d.details_json '
+            'SELECT e.item_id,e.fingerprint,e.body,e.recallable,d.details_json '
             'FROM fact_events e JOIN pipeline_event_details d ON d.event_id=e.item_id '
             "WHERE e.status='active' ORDER BY e.item_id")]
 
@@ -66,6 +66,75 @@ def _assert_snapshot(row, expected_materials):
         item['source_message_id'] for item in expected_materials)
     assert all(isinstance(item['fingerprint'], str) and item['fingerprint'] for item in fingerprints)
     return snapshot
+
+
+@pytest.mark.parametrize('protected,opt_in,mode', [(False, False, 'create'),
+    (True, False, None), (True, True, 'create')])
+@pytest.mark.parametrize('material_review', [False, True])
+def test_full_event_extension_recovers_without_repeating_impossible_append(settings, protected, opt_in, mode, material_review):
+    save_settings(settings.database, {'pipeline': {'material_review_enabled': material_review,
+                                                  'append_protected_enabled': opt_in}})
+    first_ids= _ingest_window(settings, 1)
+    full_body=''
+    async def initial(role, request):
+        nonlocal full_body
+        output=output_for(role,request)
+        if role=='event_curator' and material_review:
+            _annotate(output, [_material(key) for key in first_ids])
+        if role=='event_writer':
+            full_body=(output['event_draft']+' ')*50
+            full_body=full_body[:1499]+'.'
+            assert len(full_body)==1500
+            output['event_draft']=full_body
+            output['sentence_evidence']=[{**output['sentence_evidence'][0], 'sentence':full_body}]
+        return output
+    assert asyncio.run(p.advance(settings.database,include_recent=True,runner=initial))['events']==1
+    old, = _active_details(settings.database)
+    if not material_review:
+        from serein.compat.events import Events
+        Events(settings.database).revise(old['item_id'],recallable=False)
+        old, = _active_details(settings.database)
+    if protected:
+        with Store(settings.database) as store:
+            source_id=store.conn.execute('SELECT source_id FROM evidence_bindings WHERE document_id=?',
+                                         (old['item_id'],)).fetchone()[0]
+            store.create('synthetic_scene','scene','Book cover','Cover before changes')
+            store.bind('synthetic_scene',source_id)
+    new_ids=_ingest_window(settings,2)
+    writers=[]
+    async def continuation(role,request):
+        output=output_for(role,request)
+        if role=='event_curator':
+            assert output['events'][0]['action']=='extend'
+            view=latest.event_curator_model_input(request['component'])
+            assert view['base_events'][0]['body_chars']==1500
+            assert view['base_events'][0]['append_remaining_chars']==0
+            if material_review:_annotate(output,[_material(key) for key in new_ids])
+        if role=='event_writer':
+            assert mode is not None
+            writers.append(request)
+            assert request['writer_mode']==mode
+            assert {m['id'] for m in request['messages']}==set(new_ids)
+            assert request['event']['capacity_recovery']['base_event_id']==old['item_id']
+        return output
+    result=asyncio.run(p.advance(settings.database,include_recent=True,runner=continuation))
+    if mode is None:
+        assert result['events']==0 and result['processed_originals']==0 and result['deferred']==2
+        assert not writers
+        assert _active_details(settings.database)==[old]
+        return
+    assert result['events']==1 and result['processed_originals']==2 and len(writers)==1
+    with Store(settings.database,read_only=True) as store:
+        previous=store.conn.execute('SELECT body,status FROM fact_events WHERE item_id=?',(old['item_id'],)).fetchone()
+        assert previous['body']==full_body
+        assert previous['status']=='active'
+    active=_active_details(settings.database)
+    new=next(row for row in active if row['item_id']!=old['item_id'])
+    assert new['recallable']==old['recallable']
+    assert json.loads(new['details_json'])['capacity_recovery']['reason']=='append_capacity_exhausted'
+    if material_review:
+        _assert_snapshot(new,[_material(key) for key in new_ids])
+    assert asyncio.run(p.advance(settings.database,include_recent=True,runner=continuation))['status']=='current'
 
 
 def test_three_windows_persist_full_snapshots_but_curator_and_writer_annotate_only_delta(settings):

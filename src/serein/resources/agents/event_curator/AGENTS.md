@@ -9,7 +9,7 @@ Track 的 task_status 仅供了解任务进度；不代替原文、结束证据�
 你看到的是一条 primary Track corridor。Router 的归线提示不是 Event 边界；应直接阅读 unit 原文判断它实际承载的问题、回答、纠正、行动或结果。你不输出 source role，host 会在展开 unit 时生成证据角色。最终不写标题、正文、摘要、理由或 event_focus。
 
 附图是所属消息的原始材料，必须和文字一起阅读。区分材料中描述的事情与参与者此刻实际开展的活动；被引用、展示或提到，不等于亲自经历或实施。图片的 stable/context_only 范围与消息一致，不因看到了图片就扩大 ownership。
-有附图时，先按图片清单转录可辨认的文字，再结合原话完成切分；最终 JSON 按清单要求附带 image_transcriptions。在同一 text 中用 [画面] 简述可见的人物、物件、布局和关系，用 [文字] 保留标题、正文和评论的原文与区块顺序；没有文字也保留画面描述。只写实际可见内容，不猜身份、动机或前后经过，不提炼成主题、观点或事件摘要；看不清的部分明确标记，不猜补。Writer 只读转录，不接收原图。转录只描述图片内容，不表示发送者创造或赞同了其中的话。
+仅在本轮实际附有原图时，按图片清单转录可辨认的文字，再结合原话完成切分；最终 JSON 按清单要求附带 image_transcriptions。若输入只有 host 已校验的 curator_image_transcriptions，则只读这些转录，输出省略 image_transcriptions 或返回 []，不重新转录或修改它们。在同一 text 中用 [画面] 简述可见的人物、物件、布局和关系，用 [文字] 保留标题、正文和评论的原文与区块顺序；没有文字也保留画面描述。只写实际可见内容，不猜身份、动机或前后经过，不提炼成主题、观点或事件摘要；看不清的部分明确标记，不猜补。Writer 只读转录，不接收原图。转录只描述图片内容，不表示发送者创造或赞同了其中的话。
 
 ## Event boundary
 
@@ -37,6 +37,7 @@ Track 的 task_status 仅供了解任务进度；不代替原文、结束证据�
 - 启用 materials 审阅时，双方共同拥有的 declared bridge 可以分别提供落定前项、开展后项的不同逐字片段；每段引文必须仅在一侧的 main/mixed 中实际保留。双侧都保留的同一引文不能证明边界，不改完整 bridge ownership 来制造独占来源，不跨省略片段拼接引文。未启用 materials 时仍使用各侧独占的 owned 原文。
 - create 不选 base；extend 和 rewrite 必须选一个 base；merge 必须选至少两个 base。接续输入中某一条已保存 Event 使用 extend，只追加新段落；确有必要整篇重新组织时才显式选 rewrite 并在 decision_review.events.reason 说明原因。只选择 base_event_ids 与本轮 owned_unit_roots；host 自动计算“所有所选 base 的旧 sources + 本轮完整 units”的 exact union。
 - extend 只接续输入 base_events 中某一条已保存 Event，base_event_ids 必须恰好填写该 Event 的 event_id；同一 Track 的后续消息不等于 extend。base_events 为空时，拟议 Event 只能用 create，不能用 extend 加空 base。当前 events 数组内刚提出的 create 也不能作为 base；若后续 unit 仍属同一段活动，合入同一个 Event 的 owned_unit_roots，独立活动则分别 create。
+- base_events 的 append_remaining_chars 已扣除段落间换行。容量耗尽或不足以表达新增内容时，为新增来源 create 后续 Event，沿用同一 primary_track_id；旧 Event 只作背景，不因容量而 rewrite，也不把满额前版重新选入 merge。后续再有新材料时，可继续 extend 尚有容量的后续 Event。受保护续接仍遵守原有开关与保护条件。
 - 在 rolling_engineering Track 中，必须逐条阅读 active leaf 绑定的原文，而不能用 leaf 数量代替相关性判断。base 与新原文都服务同一 Track throughline 才是相关材料；选择全部相关 leaves：一条用 extend，多条用 merge。关系互动、作品讨论或其他误归线 leaf 保持未选择；即使它是唯一 active leaf，也允许为真正的新工程经历 create。
 - protected、manual、forked、blocked、scene_ref 或 narrative_ref 的旧正文不能被自动重写。若新原文确实接续，仍按实际关系提出带 base_event_ids 和 owned_unit_roots 的 Event；host 只在明确启用且来源版本唯一、可核验时将新段落追加成新版本，其他情况暂缓。不得用 skip 绕过保护，也不要因为保护而把独立的新活动强行写成接续。
 - Writer 普通接续只读旧正文和真正新增的 owned 原文，不读旧绑定历史；附带上下文最多六条、合计 6000 字符。只有 rewrite/merge 才读所选前版的相关旧原文。阅读范围不是 ownership。context_only 只补对象、作品、代词和承接关系；缺少必要承接时 Writer 可定向补读。context Track 的其他历史 Event 与 units 不得进入本 corridor。
@@ -55,7 +56,7 @@ Track 的 task_status 仅供了解任务进度；不代替原文、结束证据�
   - 可以保留：“吃午饭了吗” → “今天午饭的 xxx 超难吃” → “哈哈，这样炒的菜是比较难吃啦，除了这道菜没吃别的了吗”。这里针对具体体验作出了回应，不只是确认吃没吃。
   - 随已有经历保留：此前已讨论椅子松动并尝试拧紧螺丝，后来“拧好了，不晃了” → “那就好，早点休息”。这里的简短汇报确认了前面尝试的结果，应延续该经历。
 - defer 只用于两种情况：稳定前段仍被 parked 尾巴回答、纠正或落定；或当前稳定原文命中 protected、manual、forked、blocked、scene_ref、narrative_ref predecessor，必须等待人工处理。parked 尾巴若直接否定、纠正、改写或使紧邻 stable unit 的结果重新未落定，相关 stable unit 必须 defer；parked 尾巴若属于另一问题或 Track，则不影响已经落定的 stable admission。
-- events、skip、defer 必须按 unit root exact-cover 全部 stable units。parked/context_only unit 只可阅读，不输出 disposition。
+- 模型输出顶层必须包含 events、skip_unit_roots、defer_unit_roots，并按任务要求附带 decision_review；后两个数组没有内容时也返回 []，不要写 skip/defer 别名。三者按 unit root exact-cover 全部 stable units。模型不输出 skip_source_message_ids/defer_source_message_ids，它们由 host 按完整 unit 展开。parked/context_only unit 只可阅读，不输出 disposition。
 - 先检查整个 corridor。只有整个 corridor 都缺少对象、真实起因或被纠正旧主张时，才可请求一次有界 Track context。
 decision_review.events 按索引覆盖全部拟议 Event，说明实际持续展开的活动。若同一 Track 相邻两条 Event，boundaries 必须说明后段另起的活动怎样被接续，并分别逐字引用左、右 Event 各自独占的 owned 原文，或 materials 审阅确认仅一侧实质保留的共享 bridge 片段；不能只贴不同主题标签，也不能为了免写证据而强并独立活动。dispositions 完整覆盖每个 skip/defer unit；同理由可合列。skip 不引用 parked；直接 defer 必须引用输入中真实 parked source ID 并说明它如何影响稳定前段。若是受保护前版导致暂缓，仍提出 extend/merge，由 host 处理保护。
 

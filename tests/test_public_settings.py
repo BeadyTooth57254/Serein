@@ -47,6 +47,23 @@ def test_nightly_arc_organization_is_opt_in(deployment):
     assert read_settings(settings.database)['features']['narrative_nightly_organize'] is True
 
 
+def test_compact_router_switch_roundtrips_and_survives_other_settings(deployment):
+    settings, client = deployment
+    assert client.get('/v1/settings').json()['pipeline']['router_compact_cards'] is False
+    enabled = client.patch('/v1/settings', json={'pipeline': {'router_compact_cards': True}})
+    assert enabled.status_code == 200, enabled.text
+    assert enabled.json()['pipeline']['router_compact_cards'] is True
+    assert client.patch('/v1/settings', json={'pipeline': {'track_lookback_days': 5}}).status_code == 200
+    assert read_settings(settings.database)['pipeline']['router_compact_cards'] is True
+    for invalid in ('true', 1):
+        assert client.patch('/v1/settings', json={'pipeline': {'router_compact_cards': invalid}}).status_code in (400, 422)
+    # Like other optional pipeline fields, null is omitted by the PATCH API.
+    unchanged = client.patch('/v1/settings', json={'pipeline': {'router_compact_cards': None}})
+    assert unchanged.status_code == 200 and unchanged.json()['pipeline']['router_compact_cards'] is True
+    disabled = client.patch('/v1/settings', json={'pipeline': {'router_compact_cards': False}})
+    assert disabled.json()['pipeline']['router_compact_cards'] is False
+
+
 def test_passage_settings_are_optional_strict_and_independent(deployment):
     from serein.configured_models import recall_settings
     from serein.deployment import save_settings

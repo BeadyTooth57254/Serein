@@ -9,6 +9,7 @@ from serein.core.store import encode
 from serein.deployment import read_settings, save_settings
 from serein.extensions import pipeline as p
 from serein.extensions.pipeline_track_candidates import select, tokens
+from serein.extensions import pipeline_latest as latest
 
 
 def card(key, text, time='2026-10-01T00:00:00Z', **extra):
@@ -67,3 +68,54 @@ def test_request_uses_frozen_opt_in_policy_and_keeps_all_stored_cards(settings):
     assert request['active_tracks']==[] and len(data['tracks'])==1
     save_settings(settings.database,{'pipeline':{'track_candidates_enabled':False}})
     assert p.request_for(settings.database,batch,'track_router')['active_tracks']==[]
+
+
+def tag(prompt, name):
+    return json.JSONDecoder().raw_decode(prompt.split(f'<{name}>',1)[1].lstrip())[0]
+
+
+def test_compact_cards_only_omit_candidate_turns_without_mutating_sources():
+    cards=[card('session_83_track_0026','Library labels',throughline='Inspect on Sunday',
+                event_policy='rolling_engineering',task_status='in_progress')]
+    messages=[{'id':3011,'session_id':83,'role':'user','content':'Sunday at two; leave the wiring.',
+               'created_at':'2026-10-01T10:00:00Z'}]
+    recent=[{**messages[0],'id':3001,'content':'Library B12 labels, originally Friday.'}]
+    original=deepcopy((cards,messages,recent))
+    old=latest.build_event_track_message_prompt('2026-10-01',messages,cards,recent_context_messages=recent)
+    compact=latest.build_event_track_message_prompt('2026-10-01',messages,cards,recent_context_messages=recent,compact_cards=True)
+    visible=tag(compact,'active_tracks_json')
+    assert visible==[{key:value for key,value in tag(old,'active_tracks_json')[0].items() if key!='recent_turns'}]
+    assert visible[0]['track_id']=='session_83_track_0026'
+    for name in ('raw_messages_json','bounded_recent_context_json'):
+        assert tag(old,name)==tag(compact,name)
+    assert (cards,messages,recent)==original
+    assert len(compact)<len(old)
+
+
+@pytest.mark.parametrize('enabled',[False,True])
+def test_compact_setting_uses_batch_policy_and_retains_complete_cards(settings,enabled):
+    assert read_settings(settings.database)['pipeline']['router_compact_cards'] is False
+    save_settings(settings.database,{'pipeline':{'router_compact_cards':enabled}})
+    ingest(settings);p.initialize(settings.database)
+    batch=p.new_batch(settings.database,True)
+    data=json.loads(batch['input_json'])
+    data['tracks']=[card('session_83_track_0026','Library labels')]
+    batch={**batch,'input_json':encode(data)}
+    # Changing the live setting does not reinterpret this batch's input policy.
+    save_settings(settings.database,{'pipeline':{'router_compact_cards':not enabled}})
+    request=p.request_for(settings.database,batch,'track_router')
+    visible=tag(request['prompt'],'active_tracks_json')
+    assert ('recent_turns' not in visible[0]) is enabled
+    assert request['active_tracks'][0]['recent_turns']==data['tracks'][0]['recent_turns']
+    assert tag(request['prompt'],'raw_messages_json')==latest.event_track_message_payload(request['messages'])
+    assert tag(request['prompt'],'bounded_recent_context_json')==latest.event_track_message_payload(request['recent_context'])
+
+
+@pytest.mark.parametrize('value',[0,1,'true',None])
+def test_compact_setting_rejects_non_boolean_without_saving(settings,value):
+    before=read_settings(settings.database)
+    with pytest.raises(ValueError):
+        save_settings(settings.database,{'pipeline':{'router_compact_cards':value}})
+    assert read_settings(settings.database)==before
+    if value is not None:
+        with pytest.raises(ValidationError):PipelinePatch(router_compact_cards=value)

@@ -730,7 +730,8 @@ def test_configured_names_are_literal_values_not_recursive_templates(settings):
     assert '我是 NewGuide，NewReader是她' in rules
 
 
-def test_images_keep_ownership_and_only_curator_receives_pixels(settings,monkeypatch):
+@pytest.mark.parametrize('echo', ['none', 'receipts', 'indexed'])
+def test_images_keep_ownership_and_only_curator_receives_pixels(settings,monkeypatch,echo):
     uri='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX1cAAAAASUVORK5CYII='
     raw_archive(settings).ingest([
         {'source_event_id':'u','session_id':'image','role':'user','text':'This is the book','created_at':'2025-01-01T00:00:00Z','metadata':{'attachments':[{'kind':'image','url':uri,'mime_type':'image/png'}]}},
@@ -748,9 +749,32 @@ def test_images_keep_ownership_and_only_curator_receives_pixels(settings,monkeyp
             assert request['images']==[]
             assert request['curator_image_transcriptions'][0]['evidence_role']=='owned'
             assert isinstance(payload['messages'][1]['content'],str) and uri not in payload['messages'][1]['content']
-        return {'choices':[{'message':{'content':json.dumps(output_for(request['role'],request))}}]}
+        output=output_for(request['role'],request)
+        if request['role']=='event_curator':
+            assert '本轮没有输入原图' in request['prompt']
+            receipts=request['curator_image_transcriptions']
+            if echo=='receipts':output['image_transcriptions']=copy.deepcopy(receipts)
+            if echo=='indexed':output['image_transcriptions']=[
+                {'input_image':i,'text':row['text'],'unreadable':row['unreadable']}
+                for i,row in enumerate(receipts,1)]
+        return {'choices':[{'message':{'content':json.dumps(output)}}]}
     monkeypatch.setattr('serein.model_runtime.complete',complete)
     assert asyncio.run(p.advance(settings.database,include_recent=True))['events']==1
+
+
+@pytest.mark.parametrize('change', ['text', 'source', 'index', 'extra'])
+def test_pretranscribed_curator_cannot_change_or_add_image_evidence(change):
+    receipt={'source_message_id':1,'position':1,'sha256':'synthetic',
+             'evidence_role':'stable','text':'Visible book title','unreadable':False}
+    request={'role':'event_curator','pretranscribed':True,'images':[],
+             'curator_image_transcriptions':[receipt]}
+    row=copy.deepcopy(receipt)
+    if change=='text':row['text']='Invented title'
+    if change=='source':row['source_message_id']=2
+    if change=='index':row={'input_image':2,'text':receipt['text'],'unreadable':False}
+    output={'image_transcriptions':[row,copy.deepcopy(row)] if change=='extra' else [row]}
+    with pytest.raises(ValueError,match='预转录只读'):
+        p.prepare_stage_output(request,output)
 
 def test_curator_prompt_shows_complete_receipt_schema_and_safe_aliases(settings):
     from serein.extensions.pipeline_audit import canonicalize_curator_review

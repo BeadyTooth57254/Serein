@@ -159,6 +159,7 @@ export function PipelineSettings({onOpenSummary}) {
       <div className="settings-actions"><button type="button" disabled={busy||!output.trim()} onClick={submit}>提交并校验</button></div></>}
     <dialog ref={rebuildDialog} className="agent-guide" aria-labelledby="pipeline-rebuild-title" onCancel={()=>setRebuildTarget('')}>
       <h3 id="pipeline-rebuild-title">重新生成这批原话的整理计划？</h3>
+      <p>若缺少可验证的历史 Track，此次确认会从本批原话重新开始归线；该聊天后续批次也不再引用截断点之前的归线历史。</p>
       <p>批次：<code>{rebuildTarget}</code></p>
       <p>旧的归线、切分和 Writer 结果会保留为历史记录，但不会再用于新计划。尚未处理的原话将重新归线，可能需要重新调用模型。</p>
       <p>原话和已经保存的 Event 不会被删除。此操作不会把原话标成已处理或跳过。</p>

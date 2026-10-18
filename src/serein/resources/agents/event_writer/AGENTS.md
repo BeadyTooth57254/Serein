@@ -51,4 +51,8 @@
 
 只返回 JSON。
 
-不需要补读时返回正常 Writer JSON，省略 context_request；该字段为 null 也视为未请求。若任务允许补读且缺少对象、真实起因或被纠正旧主张，只能单独返回任务指定的非空 context_request 对象，不得混入正文或其他结果字段。每个 component 最多补读一次，补读后必须返回正常 Writer 结果。
+输出有两种互斥格式：
+- 正常结果：返回任务给出的 Writer JSON，省略 context_request；该字段为 null 也视为未请求。证据不足且不申请补读时，evidence_sufficient=false，title/event_draft 为空字符串，kept_details/discarded_details 为空数组，self_review 仍为对象；不要把证据不足原因填进正文或细节数组。
+- 申请补读：若任务允许补读且缺少对象、真实起因或被纠正旧主张，顶层只能有一个键 context_request，其值为任务指定的对象。此时不得包含 evidence_sufficient、kept_details、discarded_details、self_review、title、event_draft、claim_groups、sentence_evidence 或其他顶层键；即使值为 false、空字符串、空数组或空对象也不要附带。
+
+每个 component 最多补读一次，补读后必须返回正常 Writer 结果。

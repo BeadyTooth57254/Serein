@@ -186,23 +186,63 @@ def test_append_total_body_limit_remains_1500_and_preserves_old_body_on_overflow
         assert len(body)<=1500 and body.startswith(old+'\n\n')
 
 
-def test_full_old_body_blocks_append_before_any_writer_call(settings):
+@pytest.mark.parametrize('old_chars', [1498, 1500])
+def test_full_old_body_stays_active_and_new_sources_form_a_followup(settings, old_chars):
     ingest(settings)
     with Store(settings.database) as store:
-        store.conn.execute("UPDATE raw_events SET text=? WHERE source_event_id='u1'",('x'*1487,))
+        store.conn.execute("UPDATE raw_events SET text=? WHERE source_event_id='u1'",('x'*(old_chars-13),))
     assert asyncio.run(p.advance(settings.database,include_recent=True,runner=synthetic_runner))['events']==1
+    with Store(settings.database,read_only=True) as store:
+        old=dict(store.conn.execute("SELECT * FROM fact_events WHERE status='active'").fetchone())
     ingest(settings,2)
     calls=[]
-    async def without_writer(role,request):
+    async def runner(role,request):
         calls.append(role)
-        assert role!='event_writer'
+        if role=='event_writer':
+            assert request['writer_mode']=='create'
+            assert {m['id'] for m in request['messages']}=={3,4}
+            return output_for(role,{**request,'messages':[m for m in request['messages'] if m['id']==3]})
         return output_for(role,request)
-    result=asyncio.run(p.advance(settings.database,include_recent=True,runner=without_writer))
-    assert result['status']=='needs_repair' and '1500' in result['reason']
-    assert calls==['track_router','event_curator']
+    result=asyncio.run(p.advance(settings.database,include_recent=True,runner=runner))
+    assert result['events']==1 and result['processed_originals']==2
+    assert calls==['track_router','event_curator','event_writer']
     with Store(settings.database,read_only=True) as store:
-        assert len(store.conn.execute("SELECT body FROM fact_events WHERE status='active'").fetchone()[0])==1500
-        assert store.conn.execute('SELECT count(*) FROM raw_processing WHERE raw_id IN (3,4)').fetchone()[0]==0
+        previous=store.conn.execute('SELECT body,status FROM fact_events WHERE item_id=?',(old['item_id'],)).fetchone()
+        assert previous['body']==old['body'] and len(previous['body'])==old_chars
+        assert previous['status']=='active'
+        current=store.conn.execute("SELECT item_id,body FROM fact_events WHERE status='active' AND item_id!=?",(old['item_id'],)).fetchone()
+        assert 'Book club plan 2' in current['body'] and len(current['body'])<=1500
+        assert store.conn.execute('SELECT count(*) FROM fact_event_sources WHERE item_id=?',
+                                  (current['item_id'],)).fetchone()[0]==2
+        assert store.conn.execute('SELECT count(*) FROM fact_event_sources WHERE item_id=?',
+                                  (old['item_id'],)).fetchone()[0]==2
+        assert store.conn.execute('SELECT track_id FROM pipeline_track_events WHERE event_id=?',
+                                  (old['item_id'],)).fetchone()[0]==store.conn.execute(
+                                      'SELECT track_id FROM pipeline_track_events WHERE event_id=?',
+                                      (current['item_id'],)).fetchone()[0]
+        assert store.conn.execute('SELECT count(*) FROM raw_processing WHERE raw_id IN (3,4)').fetchone()[0]==2
+    assert asyncio.run(p.advance(settings.database,include_recent=True,runner=runner))['status']=='current'
+    assert len(calls)==3
+    ingest(settings,3)
+    async def next_window(role,request):
+        output=output_for(role,request)
+        if role=='event_curator':
+            # Full earlier parts must not be absorbed into a later rewrite/merge.
+            assert output['events'][0]['action']=='merge'
+            with pytest.raises(ValueError,match='容量耗尽.*只作背景'):
+                p.validate(request,output)
+            proposal=output['events'][0]
+            proposal['action']='extend'
+            proposal['base_event_ids']=[current['item_id']]
+        if role=='event_writer':
+            assert request['writer_mode']=='append'
+            assert {m['id'] for m in request['messages']}=={5,6}
+        return output
+    assert asyncio.run(p.advance(settings.database,include_recent=True,runner=next_window))['events']==1
+    with Store(settings.database,read_only=True) as store:
+        previous=store.conn.execute('SELECT body,status FROM fact_events WHERE item_id=?',(old['item_id'],)).fetchone()
+        assert tuple(previous)==(old['body'],'active')
+        assert store.conn.execute("SELECT count(*) FROM fact_events WHERE status='active'").fetchone()[0]==2
 
 
 def test_completed_legacy_writer_is_not_replayed_or_appended_twice(settings):
