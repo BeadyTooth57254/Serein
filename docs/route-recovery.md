@@ -12,6 +12,10 @@ Track 的当前延续卡会随新的窗口继续更新；`scope` 表示最后使
 
 完成批的压缩快照保留 Router 初始 `tracks`、`recent`、`next_track_ordinal` 和候选筛选 `input_policy`。已知旧版压缩快照缺失这些字段时，从已保存的 Router 请求恢复初始状态，并继续核对后续状态、原话哈希和时间边界；候选 Track 暂时隐藏后重新出现，也必须符合之前的更新。此次旧版兼容只用于已完成的压缩批，未完成批仍保留代码升级审查，已有待修复计划可能需要明确重建一次。
 
+已发布的归线来源（`routed`、`done`、`superseded_input_budget`）若保留完整初始状态和逐请求 `routing_frame`，即使 `runtime_revision` 与当前代码不同，也会按保存的请求逐帧核对；仍要求相同数据契约和 scope，原话、来源版本、前序卡片、ordinal、assignment 及时间范围必须全部通过校验。这不会重新调用旧任务，也不会把旧记录的版本号改成当前值。缺少完整初始状态的旧压缩批仍仅兼容已知版本，未完成任务仍保留升级审查。
+
+`route producer has an incompatible frozen contract` 指向的是归线来源批次，未必是面板上的当前批次。错误现在包含 producer ID、状态、保存的 contract/runtime、当前 contract/runtime，以及保存和预期 scope。排查升级问题时应将它们与当前批次的 ID、`rebuild_of`、contract/runtime 一起核对。明确重建本来就会将新计划冻结到当前 contract/runtime；新计划引用旧 producer 不能证明新计划继承了旧版本号。不要直接改历史记录的版本号或仅追加版本白名单来消除报错。
+
 恢复结果写入当前批次快照。历史恢复只会补齐数据库里真正缺失的 Track 卡，绝不覆盖任何已经存在的全局卡片；因此即使旧卡缺少 `recent_source_message_ids`，也不会被历史状态倒灌。普通当前归线仍使用 `preserve_newer`。已经完成且相容的 Curator/Writer 结果继续复用。没有逐条保存的旧 provenance 不会在初始化时被猜测填充。
 
 ## 界面出口
@@ -32,6 +36,8 @@ HTTP：`POST /v1/pipeline/rebuild`，请求包含 `batch_id` 和 `confirm="REBUI
 ## 验证范围
 
 合成回归覆盖跨窗卡片迁移、旧版无 provenance、来源卡片确实缺行、较大日间批次的早期输入块恢复、旧任务复用、源内容/ordinal/bridge 不匹配、歧义来源、事务回滚、确认重建、旧记录保留、鉴权与 lease 冲突。没有连接真实部署或读取真实对话。本改动不加入并发，不改变 Event Writer 的 500 字软预算与 1500 字异常阈值。
+
+升级回放另使用 `180c94a` 的实际代码生成合成数据库：`93eb2d7` 读取其中已发布的归线会重现 incompatible frozen contract；修复后可以核对旧归线，明确重建的新计划使用当前版本，旧 producer 记录保持原样，重建批次及后续窗口均可结算。此验证仍不代表已核对反馈者实例中的具体 producer 记录。
 
 ## 与模型失败暂停的区别
 

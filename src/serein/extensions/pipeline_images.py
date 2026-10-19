@@ -140,9 +140,10 @@ def freeze_task_images(database,batch_id,images,previous=(),*,missing=None):
         else:
             try:
                 body,mime=image_bytes(image['url'])
-            except MissingOriginalImage:
+            except (ValueError, OSError, http.client.HTTPException) as error:
                 if missing is None:raise
-                missing.append({'source_message_id':key[0],'position':key[1],'reason':'original_missing'})
+                missing.append({'source_message_id':key[0],'position':key[1],
+                                'reason':'original_missing' if isinstance(error,MissingOriginalImage) else 'original_unavailable'})
                 continue
             sha=hashlib.sha256(body).hexdigest()
             new.append((batch_id,key[0],key[1],sha,mime,body))

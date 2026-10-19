@@ -63,16 +63,28 @@ def _frames(database, batch):
     original = json.loads(batch['input_json'])
     legacy_compacted = (batch['status'] == 'done' and original.get('task_snapshot_compacted') is True
         and all(key not in original for key in ('tracks', 'recent', 'next_track_ordinal', 'input_policy')))
-    if (original.get('contract') != p.CONTRACT
-            or (original.get('runtime_revision') != p.runtime_revision()
-                and not (legacy_compacted and original.get('runtime_revision') in COMPACTED_ROUTER_REVISIONS))
-            or original.get('scope') != batch['scope']):
-        raise p.RoutingRecoveryError('route producer has an incompatible frozen contract')
-    if not _same_scope(original, original.get('routing_messages', [])):
-        raise p.RoutingRecoveryError('route producer messages do not belong to its frozen scope')
     jobs = p.router_jobs(database, batch)
     if len(jobs) > MAX_HISTORY_JOBS:
         raise p.RoutingRecoveryError('route history exceeds bounded job recovery limit')
+    # The runtime revision protects unfinished execution. Published Router
+    # receipts with a complete seed and per-request proofs can instead be
+    # checked below against their own inputs, even after downstream code changes.
+    published_replay = (batch['status'] in SOURCE_STATES
+        and all(key in original for key in ('tracks', 'recent', 'next_track_ordinal', 'input_policy'))
+        and bool(jobs) and all('routing_frame' in json.loads(row['request_json']) for row in jobs))
+    current_revision = p.runtime_revision()
+    if (original.get('contract') != p.CONTRACT
+            or (original.get('runtime_revision') != current_revision
+                and not published_replay
+                and not (legacy_compacted and original.get('runtime_revision') in COMPACTED_ROUTER_REVISIONS))
+            or original.get('scope') != batch['scope']):
+        raise p.RoutingRecoveryError('route producer has an incompatible frozen contract: '
+            f"producer={batch['id']}; status={batch['status']}; "
+            f"contract={original.get('contract')!r}; expected_contract={p.CONTRACT!r}; "
+            f"runtime_revision={original.get('runtime_revision')!r}; current_runtime_revision={current_revision!r}; "
+            f"scope={original.get('scope')!r}; expected_scope={batch['scope']!r}")
+    if not _same_scope(original, original.get('routing_messages', [])):
+        raise p.RoutingRecoveryError('route producer messages do not belong to its frozen scope')
     if not jobs:
         result = original.get('routing_result')
         if result is None:

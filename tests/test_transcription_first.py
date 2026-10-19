@@ -138,3 +138,50 @@ def test_partial_cache_keeps_each_images_original_source_fingerprint(settings):
     messages = p.image_source_messages(settings.database, [{'id': 1}])
     refs, _ = p.writer_images(messages, {1})
     assert [row['position'] for row in transcribed_image_receipts(messages, refs)] == [2]
+
+
+@pytest.mark.parametrize('failure', ['transcription', 'download', 'missing', 'unreadable'])
+def test_images_without_text_finish_summary_with_count(settings, monkeypatch, failure):
+    from test_image_transcription import pictures
+    urls = pictures(2)
+    raw_archive(settings).ingest([
+        {'source_event_id': 'photos', 'session_id': 'photos', 'role': 'user', 'text': '[图片]',
+         'created_at': '2025-01-01T00:00:00Z', 'metadata': {'attachments': [
+             {'kind': 'image', 'url': url} for url in urls]}},
+        {'source_event_id': 'reply', 'session_id': 'photos', 'role': 'assistant',
+         'text': 'Synthetic reply', 'created_at': '2025-01-01T00:01:00Z'}], source='test')
+    if failure == 'transcription':
+        p.initialize(settings.database)
+        with Store(settings.database) as store:
+            store.conn.execute('INSERT INTO pipeline_image_holds SELECT id,?,event_hash FROM raw_events', ('a' * 64,))
+    if failure in ('download', 'missing'):
+        def unavailable(url):
+            if failure == 'missing':
+                raise images.MissingOriginalImage('Synthetic gone image')
+            raise TimeoutError('Synthetic download timeout')
+        monkeypatch.setattr(images, 'image_bytes', unavailable)
+    seen = []
+    async def runner(role, request):
+        if request.get('transcription_only'):
+            if failure == 'unreadable':
+                return {'image_transcriptions': [{'input_image': 1, 'text': '', 'unreadable': True}]}
+            raise TimeoutError('Synthetic transcription timeout')
+        if role in ('event_curator', 'event_writer'):
+            seen.append(role)
+            assert request['images'] == []
+            assert request['image_fallbacks'] == [{'source_message_id': 1, 'image_count': 2,
+                'evidence_role': 'owned', 'text': '发了 2 张图片'}]
+            assert '发了 2 张图片' in request['prompt']
+        output = output_for(role, request)
+        if role == 'event_writer':
+            sentence = '她发了 2 张图片。'
+            output['event_draft'] = sentence
+            output['claim_groups'][0]['summary'] = sentence
+            output['sentence_evidence'][0]['sentence'] = sentence
+        return output
+    result = asyncio.run(p.advance(settings.database, include_recent=True, runner=runner))
+    assert result['events'] == 1 and result['deferred'] == 0, result
+    assert seen == ['event_curator', 'event_writer']
+    with Store(settings.database, read_only=True) as store:
+        assert store.conn.execute('SELECT body FROM fact_events').fetchone()[0] == '她发了 2 张图片。'
+    assert asyncio.run(p.advance(settings.database, include_recent=True, runner=runner))['status'] == 'current'

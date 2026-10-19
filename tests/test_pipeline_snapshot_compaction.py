@@ -99,9 +99,13 @@ def test_completed_multiframe_candidates_reuse_routes_without_scope_hold(setting
     assert calls and set(calls)=={'event_curator','event_writer'}
 
 
+@pytest.mark.parametrize('upgraded',[False,True])
 @pytest.mark.parametrize('damage',['card','ordinal','recent','hash','source','future_card','missing_proof'])
-def test_legacy_compacted_replay_still_rejects_damaged_frames(settings,monkeypatch,damage):
-    _,batch,_=completed_history(settings,monkeypatch,True)
+def test_compacted_replay_still_rejects_damaged_frames(settings,monkeypatch,damage,upgraded):
+    _,batch,_=completed_history(settings,monkeypatch,not upgraded)
+    if upgraded:
+        data=json.loads(batch['input_json']);data['runtime_revision']='synthetic-before-upgrade'
+        batch['input_json']=encode(data)
     with Store(settings.database) as store:
         jobs=store.conn.execute("SELECT * FROM pipeline_jobs WHERE batch_id=? ORDER BY rowid",(batch['id'],)).fetchall()
         job=jobs[1 if damage=='future_card' else 2]
