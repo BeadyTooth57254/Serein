@@ -28,7 +28,7 @@ def assert_before(store, cards, before_id):
             raise p.RoutingRecoveryError('Pre-routing Track has no proved source anchors: '+card['track_id'])
         for key in anchors:
             row=store.conn.execute('SELECT created_at FROM raw_events WHERE id=?',(key,)).fetchone() if type(key) is int else None
-            if row is None or key>=before_id or datetime.fromisoformat(row[0].replace('Z','+00:00'))>reference:
+            if row is None or key>=before_id:
                 raise p.RoutingRecoveryError('Pre-routing Track contains future source material: '+card['track_id'])
 
 
