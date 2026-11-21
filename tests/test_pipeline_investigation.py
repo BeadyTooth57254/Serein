@@ -26,23 +26,24 @@ def test_deleted_predecessor_holds_batch_without_repeating_models(settings):
                 store.conn.execute("UPDATE fact_events SET status='tombstoned' WHERE item_id=?",(predecessor,))
         return output_for(role,request)
     held=asyncio.run(p.advance(settings.database,include_recent=True,runner=delete_during_writer))
-    assert held['status']=='needs_repair' and held['repair_kind']=='event_settlement'
+    assert held['status']=='retained'
     assert 'no_active_leaf' in held['reason']
     assert calls.count('event_writer')==1
     async def forbidden(*args):
         raise AssertionError('accepted model result must not be requested again')
     blocked=asyncio.run(p.advance(settings.database,include_recent=True,runner=forbidden))
-    assert {key:blocked[key] for key in held}==held
-    assert blocked['blocked_scopes'][0]['hold_status']=='needs_repair'
-    assert blocked['blocked_scopes'][0]['batch_id']==held['batch_id']
+    assert blocked['status']=='current'
     retried=asyncio.run(p.advance(settings.database,include_recent=True,runner=forbidden,retry_repair=True))
-    assert retried['status']=='needs_repair' and 'no_active_leaf' in retried['reason']
+    assert retried['status']=='current'
     with Store(settings.database,read_only=True) as store:
         assert store.conn.execute('SELECT count(*) FROM fact_events').fetchone()[0]==1
         assert store.conn.execute('SELECT count(*) FROM raw_processing WHERE operation_id=?',(held['batch_id'],)).fetchone()[0]==0
         assert store.conn.execute('SELECT count(*) FROM pipeline_jobs WHERE batch_id=? AND output_json IS NULL',(held['batch_id'],)).fetchone()[0]==0
-    rebuilt=asyncio.run(recovery.rebuild(settings.database,held['batch_id'],'REBUILD_PIPELINE_BATCH'))
-    assert rebuilt['status']=='rebuilt'
+        retained=store.conn.execute('SELECT id,status,reason FROM pipeline_pending_materials WHERE batch_id=?',(held['batch_id'],)).fetchone()
+        assert retained['status']=='open' and 'no_active_leaf' in retained['reason']
+    from serein.extensions.pipeline_pending import resume
+    rebuilt=resume(settings.database,retained['id'],replan=True)
+    assert rebuilt['status']=='resumed'
     assert asyncio.run(p.advance(settings.database,include_recent=True,runner=synthetic_runner))['events']==1
     assert asyncio.run(p.advance(settings.database,include_recent=True,runner=forbidden))['status']=='current'
 
@@ -92,6 +93,7 @@ def test_retry_progress_counts_the_actual_corrective_request(settings,monkeypatc
     monkeypatch.setattr('serein.work_tasks.progress',lambda **fields:progress.append(fields))
     calls=[]
     async def complete(model,payload):
+        assert payload['messages'][0]['content'] not in payload['messages'][1]['content']
         calls.append(sum(len(message['content']) for message in payload['messages']))
         if len(calls)==1:return {'choices':[{'message':{'content':'{'}}]}
         with Store(settings.database,read_only=True) as store:
@@ -102,6 +104,62 @@ def test_retry_progress_counts_the_actual_corrective_request(settings,monkeypatc
     assert asyncio.run(p.advance(settings.database,include_recent=True))['events']==1
     reported=[entry['prompt_chars'] for entry in progress if 'attempt' in entry and 'prompt_chars' in entry]
     assert reported==calls and calls[1]>calls[0]
+
+
+def test_all_pipeline_roles_deliver_rules_once(settings):
+    ingest(settings)
+    calls=[]
+    async def once_only(role,request):
+        calls.append(role)
+        assert request['rules']
+        assert request['rules'] not in request['prompt']
+        if role=='event_curator':
+            standalone=latest.build_event_track_curator_prompt('2025-01-01',request['component'])
+            assert request['rules'] in standalone
+        return output_for(role,request)
+    assert asyncio.run(p.advance(settings.database,include_recent=True,runner=once_only))['events']==1
+    assert calls==list(p.ROLES)
+
+
+def test_pending_curator_removes_only_leading_duplicate_and_preserves_accepted_request(settings):
+    ingest(settings)
+    task=asyncio.run(p.advance(settings.database,include_recent=True))
+    p.submit(settings.database,task['job_id'],output_for(task['role'],task['request']))
+    task=asyncio.run(p.advance(settings.database,include_recent=True))
+    assert task['role']=='event_curator'
+    with Store(settings.database,read_only=True) as store:
+        frozen=json.loads(store.conn.execute('SELECT request_json FROM pipeline_jobs WHERE id=?',(task['job_id'],)).fetchone()[0])
+    header,separator,body=frozen['prompt'].partition('\n\n')
+    # Keep an identical quotation later in the prompt. Only the generated
+    # leading rules block is redundant; original material must not be edited.
+    body=body.removeprefix(frozen['rules'])
+    quotation='\n<quoted_original>\n'+frozen['rules']+'\n</quoted_original>'
+    expected=header+separator+body+quotation
+    frozen['prompt']=header+separator+frozen['rules']+body+quotation
+    with Store(settings.database) as store:
+        store.conn.execute('UPDATE pipeline_jobs SET request_json=? WHERE id=?',
+                           (encode(frozen),task['job_id']))
+    expected_task={**task,'request':p.writer_task_view({**frozen,'prompt':expected})}
+    limit=len(encode(expected_task))
+    save_settings(settings.database,{'pipeline':{'max_prompt_chars':limit}})
+    resumed=asyncio.run(p.advance(settings.database,include_recent=True))
+    assert resumed['job_id']==task['job_id']
+    assert resumed['request']['rules']==frozen['rules']
+    assert resumed['request']['prompt']==expected
+    with Store(settings.database,read_only=True) as store:
+        assert json.loads(store.conn.execute('SELECT request_json FROM pipeline_jobs WHERE id=?',
+            (task['job_id'],)).fetchone()[0])['component']==frozen['component']
+    p.submit(settings.database,resumed['job_id'],output_for('event_curator',resumed['request']))
+    # An accepted old request is a receipt, even if it has redundant rules.
+    with Store(settings.database) as store:
+        store.conn.execute('UPDATE pipeline_jobs SET request_json=? WHERE id=?',
+                           (encode(frozen),task['job_id']))
+        accepted=dict(store.conn.execute('SELECT * FROM pipeline_jobs WHERE id=?',(task['job_id'],)).fetchone())
+    writer=asyncio.run(p.advance(settings.database,include_recent=True))
+    assert writer['role']=='event_writer'
+    with Store(settings.database,read_only=True) as store:
+        assert dict(store.conn.execute('SELECT * FROM pipeline_jobs WHERE id=?',
+                                      (task['job_id'],)).fetchone())==accepted
 
 
 def test_writer_omits_large_old_sources_and_upgrades_pending_frozen_request(settings):

@@ -46,3 +46,7 @@ Resume content checkboxes appear only while its feature switch is on. Keep favor
 
 ## 2026-09-12 Settings configuration
 Upstream credentials and model catalogs live in 模型. Functional model assignments, automatic Event execution/limits and Agent setup guides live in the separate 配置 tab. 上游与模型 and the configured upstream list are immediately visible; each upstream card starts collapsed, hiding its models and editor until expanded. The automatic-summary switch lives in 功能 and keeps its save semantics. Settings navigation uses pale gray dashed-underlined text. Hide the outer page scrollbar while retaining wheel/touch scrolling; mobile tabs stay on one line and scroll horizontally.
+
+## 2026-10-21 letters
+
+The diary entrance is 「未寄出的」 and its page title is 「未寄出的信」. Keep the staggered serif glyph artwork, fine grid and title treatments. Letters unfold below their titles, with frames growing from the title edges; sealed entries retain a blurred placeholder and slide out only their unlock time/countdown. Never put sealed titles or bodies into the DOM. Reveal readable Markdown in document order at 22ms per glyph with a 180ms blur animation; keep grapheme clusters, reduced motion and configurable author names.

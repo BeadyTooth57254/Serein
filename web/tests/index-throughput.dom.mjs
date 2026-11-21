@@ -44,7 +44,7 @@ try{
   assert.equal(saves.length,1);
   assert.deepEqual(saves[0].recall,{embedding_batch_size:32,embedding_concurrency:2,index_catch_up:true});
   assert.equal(saves[0].upstream.memory_enabled,false);assert.equal(state.recall.passages_enabled,false);
-  assert(!('auto_enabled' in saves[0].pipeline));assert.equal(state.pipeline.auto_enabled,false);
+  assert(!('pipeline' in saves[0]));assert.equal(state.pipeline.auto_enabled,false);
   await act(async()=>{root.unmount();root=mount();await wait();});
   assert.equal(input('向量每批条数').value,'32');assert.equal(input('向量请求并发数').value,'2');
   assert.equal(input('加快后台索引追赶').checked,true);

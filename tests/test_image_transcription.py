@@ -20,7 +20,7 @@ def test_curator_reread_adds_transcribed_context_before_text_only_writer(setting
     configure(settings)
     ingest(settings)
     seen=[];context_ids=[]
-    def reread(database,component,query):
+    def reread(database,component,query,**kwargs):
         import copy
         reading=copy.deepcopy(component)
         raw_archive(settings).ingest([{'source_event_id':'context-image','session_id':'earlier',
@@ -31,6 +31,9 @@ def test_curator_reread_adds_transcribed_context_before_text_only_writer(setting
         context_ids.append(context_id)
         reading['context_messages'].append({**reading['messages'][0],'id':context_id,'content':'Earlier picture',
             'metadata':{'attachments':[{'kind':'image','url':PNG}]}})
+        reading['memberships'].append({'unit_root_message_id':context_id,
+            'source_message_ids':[context_id], 'track_id':query['track_id'],
+            'session_id':reading['messages'][0]['session_id'], 'routing_role':'primary_activity'})
         return reading
     monkeypatch.setattr(p,'extend_context',reread)
     async def runner(role,request):
@@ -272,14 +275,14 @@ def test_pipeline_partial_success_finishes_with_image_count(settings):
         if role in ('event_curator', 'event_writer'):
             assert request['images'] == []
             assert [item['position'] for item in request['curator_image_transcriptions']] == [1, 3]
-            assert request['image_fallbacks'][0]['text'] == '发了 1 张图片'
+            assert request['image_fallbacks'][0]['text'] == 'user 发送了 1 张图'
             assert '不得猜补画面' in request['prompt']
         return output_for(role, request)
     assert asyncio.run(p.advance(settings.database, include_recent=True, runner=runner))['events'] == 1
     assert asyncio.run(p.advance(settings.database, include_recent=True, runner=runner))['status'] == 'current'
-    assert seen == [1, 2, 3]
+    assert seen == [1, 2, 2, 3]
     record = raw_archive(settings).get_event(1)['image_transcription']
-    assert record['status'] == 'failed'
+    assert record['status'] == 'failed' and record['fallback_mode']=='presence_only'
     assert [row['position'] for row in record['items']] == [1, 3]
     assert record['failed_images'][0]['position'] == 2
 

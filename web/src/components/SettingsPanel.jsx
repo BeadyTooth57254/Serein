@@ -7,7 +7,7 @@ import { PipelineSettings } from "./PipelineSettings.jsx";
 import { LegacyMigration } from "./LegacyMigration.jsx";
 import { togetherCaption } from "../storage/togetherDate.js";
 
-const tabs = [["appearance", "外观"], ["features", "功能"], ["models", "模型"], ["configuration", "配置"], ["imports", "对话导入"], ["migration", "旧库迁移"]];
+const tabs = [["appearance", "外观"], ["features", "功能"], ["models", "模型"], ["configuration", "配置"], ["summary", "自动摘要管理"], ["imports", "对话导入"], ["migration", "旧库迁移"]];
 
 export function SettingsPanel({
   open,
@@ -65,10 +65,8 @@ export function SettingsPanel({
     window.addEventListener("serein:open-settings-tab", openTab);
     return () => window.removeEventListener("serein:open-settings-tab", openTab);
   }, [open]);
-  const [summaryRequest, setSummaryRequest] = useState(0);
   function openSummary() {
-    showTab("configuration");
-    setSummaryRequest(value => value + 1);
+    showTab("summary");
   }
   function navigateTabs(event, index) {
     const moves = { ArrowRight: (index + 1) % tabs.length, ArrowLeft: (index + tabs.length - 1) % tabs.length, Home: 0, End: tabs.length - 1 };
@@ -84,6 +82,12 @@ export function SettingsPanel({
         className="settings-panel settings-page"
         aria-labelledby="settings-title"
         hidden={!open}
+        onInvalidCapture={event => {
+          // Native validation must be able to focus fields in closed menus.
+          for (let node = event.target.parentElement; node; node = node.parentElement) {
+            if (node.tagName === "DETAILS") node.open = true;
+          }
+        }}
       >
         <header className="settings-panel__header">
           <button type="button" aria-label="返回上一页" onClick={onClose}>
@@ -165,6 +169,14 @@ export function SettingsPanel({
             <div className="settings-actions"><button type="button" disabled={anniversary.busy} onClick={anniversary.onSave}>{anniversary.busy ? "保存中…" : "保存日期"}</button></div>
             <p role="status">{anniversary.status}</p>
 
+            <label className="settings-field">
+              <span>写在我们下面的话</span>
+              <textarea value={coverSettings.tagline} rows={3} maxLength={80}
+                onChange={(event) => onCoverSetting("tagline", event.target.value)} />
+            </label>
+
+            <details className="settings-menu">
+            <summary><span>封面细节<small>白色过渡、头像柔光</small></span></summary>
             <label className="settings-range">
               <span>
                 <strong>白色过渡位置</strong>
@@ -193,22 +205,12 @@ export function SettingsPanel({
               />
             </label>
 
-            <label className="settings-field">
-              <span>写在我们下面的话</span>
-              <textarea
-                value={coverSettings.tagline}
-                rows={3}
-                maxLength={80}
-                onChange={(event) => onCoverSetting("tagline", event.target.value)}
-              />
-            </label>
+            </details>
           </section>
 
-          <section className="settings-group" aria-labelledby="settings-composition-title">
-            <div className="settings-group__heading">
-              <h3 id="settings-composition-title">黑白构成</h3>
-              <p>装饰会随封面一起收缩，并在画像退场前先淡去。</p>
-            </div>
+          <details className="settings-menu" aria-labelledby="settings-composition-title">
+            <summary><span id="settings-composition-title">黑白构成<small>{coverSettings.compositionEnabled ? "已开启 · 编辑装饰的位置与大小" : "未开启 · 封面上的装饰元素"}</small></span></summary>
+            <p className="model-connection-help">装饰会随封面一起收缩，并在画像退场前先淡去。</p>
             <label className="settings-toggle">
               <span>
                 <strong>显示构成元素</strong>
@@ -224,12 +226,12 @@ export function SettingsPanel({
               <button type="button" onClick={onEditComposition}>编辑位置与大小</button>
               <button type="button" onClick={onResetComposition}>恢复默认构图</button>
             </div>
-          </section>
+          </details>
           </div>
           <div role="tabpanel" id="settings-content-features" aria-labelledby="settings-tab-features" aria-hidden={tab !== "features"} inert={tab !== "features"}>
-            {open && <FeatureSettings onOpenSummary={openSummary} onOpenEventGuide={onOpenEventGuide} />}
+            {open && <FeatureSettings onOpenSummary={openSummary} />}
           </div>
-          {open && <ModelSettings page={tab} summaryRequest={summaryRequest} recallThreshold={recallThreshold} setRecallThreshold={setRecallThreshold}
+          {open && <ModelSettings page={tab} onOpenEventGuide={onOpenEventGuide} recallThreshold={recallThreshold} setRecallThreshold={setRecallThreshold}
             candidateThresholdDraft={candidateThresholdDraft} setCandidateThresholdDraft={setCandidateThresholdDraft}
             passageDraft={passageDraft} setPassageDraft={setPassageDraft} onOpenPipeline={()=>showTab("imports")} onOpenCatalog={()=>showTab("models")} onOpenAssignments={()=>showTab("configuration")} />}
           <div role="tabpanel" id="settings-content-imports" aria-labelledby="settings-tab-imports" aria-hidden={tab !== "imports"} inert={tab !== "imports"}>

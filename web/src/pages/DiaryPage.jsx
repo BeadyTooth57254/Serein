@@ -1,5 +1,5 @@
 import { identityName } from "../storage/instanceStore.js";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   BookOpenText,
   CalendarBlank,
@@ -29,6 +29,7 @@ import {
   storeDiaryEntries,
 } from "../storage/diaryStore.js";
 import { MarkdownProjection } from "../components/MarkdownProjection.jsx";
+import { DarkroomTitle } from "../components/DarkroomTitle.jsx";
 import { DarkroomLetter } from "../components/DarkroomLetter.jsx";
 
 const dayNames = ["日", "一", "二", "三", "四", "五", "六"];
@@ -96,7 +97,7 @@ const formatDarkroomUnlockAt = (value) => {
 export function DiaryPage() {
   const readerRef = useRef(null);
   const darkroomFocusRef = useRef(null);
-  const darkroomReaderRef = useRef(null);
+  const darkroomTriggerRef = useRef(null);
   const darkroomDialogRef = useRef(null);
   const [diaryUserIdentity, setDiaryUserIdentity] = useState(readDiaryUserIdentity);
   const [entries, setEntries] = useState(() => sortEntries(readDiaryEntries()));
@@ -155,7 +156,7 @@ export function DiaryPage() {
     const closeOnEscape = (event) => {
       if (event.key === "Tab" && darkroomOpen) {
         const controls = [...(darkroomDialogRef.current?.querySelectorAll('button:not([disabled]), a[href]') ?? [])]
-          .filter((control) => window.getComputedStyle(control).visibility !== "hidden");
+          .filter(control => !control.closest("[inert]") && window.getComputedStyle(control).visibility !== "hidden");
         const target = event.shiftKey ? controls.at(-1) : controls[0];
         if (!controls.includes(document.activeElement)
           || (event.shiftKey && document.activeElement === controls[0])
@@ -167,8 +168,8 @@ export function DiaryPage() {
       if (event.key !== "Escape") return;
       setComposerOpen(false);
       setEditingEntryId(null);
-      if (darkroomOpen && darkroomEntryId) setDarkroomEntryId(null);
-      else setDarkroomOpen(false);
+      if (darkroomOpen && darkroomEntryId) putBackDarkroomLetter();
+      else if (darkroomOpen) closeDarkroom();
     };
     document.addEventListener("keydown", closeOnEscape);
     return () => document.removeEventListener("keydown", closeOnEscape);
@@ -208,22 +209,24 @@ export function DiaryPage() {
   const calendarEntries = calendarDate ? entriesByDate.get(calendarDate) ?? [] : [];
   const selectedDayEntries = selectedEntry ? entriesByDate.get(selectedEntry.date) ?? [] : [];
   const selectedDayIndex = selectedDayEntries.findIndex((entry) => entry.id === selectedEntry?.id);
-  const selectedDarkroomEntry = darkroomEntries.find((entry) => entry.id === darkroomEntryId) ?? null;
-  const selectedDarkroomLocked = selectedDarkroomEntry && isDarkroomEntryLocked(selectedDarkroomEntry, darkroomClock);
-  const darkroomUnlockTime = new Date(selectedDarkroomEntry?.unlockAt).getTime();
-  const darkroomRemainingSeconds = Number.isFinite(darkroomUnlockTime)
-    ? Math.max(0, Math.ceil((darkroomUnlockTime - darkroomClock) / 1000)) : null;
   const overdueDarkroomIds = darkroomEntries.filter((entry) => entry.locked === true
     && Number.isFinite(new Date(entry.unlockAt).getTime())
     && new Date(entry.unlockAt).getTime() <= darkroomClock).map((entry) => entry.id).join(",");
 
-  useEffect(() => {
-    if (darkroomOpen) {
-      if (selectedDarkroomLocked) darkroomDialogRef.current?.focus();
-      else darkroomFocusRef.current?.focus();
-      darkroomReaderRef.current?.scrollTo({ top: 0 });
-    }
-  }, [darkroomOpen, selectedDarkroomEntry?.id, selectedDarkroomLocked]);
+  useEffect(() => { if (darkroomOpen) darkroomFocusRef.current?.focus(); }, [darkroomOpen]);
+
+  useLayoutEffect(() => {
+    const room = darkroomDialogRef.current;
+    const trigger = darkroomTriggerRef.current;
+    if (!darkroomOpen || !room?.animate || !trigger || window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
+    const from = trigger.getBoundingClientRect();
+    const to = room.getBoundingClientRect();
+    const animation = room.animate([
+      { clipPath: `inset(${from.top - to.top}px ${to.right - from.right}px ${to.bottom - from.bottom}px ${from.left - to.left}px)` },
+      { clipPath: "inset(0px 0px 0px 0px)" },
+    ], { duration: 680, easing: "cubic-bezier(.22,1,.36,1)" });
+    return () => animation.cancel();
+  }, [darkroomOpen]);
 
   useEffect(() => {
     if (!darkroomOpen) return undefined;
@@ -250,11 +253,31 @@ export function DiaryPage() {
     };
   }, [darkroomOpen, overdueDarkroomIds]);
 
-  const openDarkroom = () => {
+  const openDarkroom = event => {
+    darkroomTriggerRef.current = event.currentTarget;
     setDarkroomEntryId(null);
     setDarkroomClock(Date.now());
     setDarkroomOpen(true);
   };
+
+  function closeDarkroom() {
+    const room = darkroomDialogRef.current;
+    const trigger = darkroomTriggerRef.current;
+    const finish = () => { setDarkroomOpen(false); trigger?.focus(); };
+    if (!room?.animate || !trigger || window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) { finish(); return; }
+    const from = room.getBoundingClientRect();
+    const to = trigger.getBoundingClientRect();
+    const animation = room.animate([
+      { clipPath: "inset(0px 0px 0px 0px)" },
+      { clipPath: `inset(${to.top - from.top}px ${from.right - to.right}px ${from.bottom - to.bottom}px ${to.left - from.left}px)` },
+    ], { duration: 440, easing: "cubic-bezier(.65,0,.35,1)", fill: "forwards" });
+    animation.finished.then(finish, () => {});
+  }
+
+  function putBackDarkroomLetter() {
+    darkroomDialogRef.current?.querySelector('.darkroom-letter[aria-expanded="true"]')?.focus();
+    setDarkroomEntryId(null);
+  }
 
   const updateEntry = (entryId, update) => {
     setEntries((current) => current.map((entry) => (
@@ -432,7 +455,7 @@ export function DiaryPage() {
         <div className="diary-toolbar__actions">
           <button className="diary-action diary-action--quiet" type="button" onClick={openDarkroom}>
             <LockSimple size={18} weight="light" aria-hidden="true" />
-            进入暗房
+            未寄出的
           </button>
           <button className="diary-action diary-action--primary" type="button" onClick={openNewComposer}>
             <PencilSimpleLine size={18} weight="light" aria-hidden="true" />
@@ -730,73 +753,50 @@ export function DiaryPage() {
       ) : null}
 
       {darkroomOpen ? (
-        <div className={`diary-modal-layer diary-modal-layer--darkroom diary-modal-layer--darkroom-${selectedDarkroomLocked ? "locked" : "open"}`} role="presentation">
+        <div
+          className="diary-modal-layer diary-modal-layer--darkroom diary-modal-layer--darkroom-open"
+          role="presentation"
+        >
           <div className="diary-modal-layer__veil" aria-hidden="true" />
-          {selectedDarkroomLocked ? (
-            <section key={selectedDarkroomEntry.id} ref={darkroomDialogRef} tabIndex={-1} className="darkroom-door darkroom-door--sequenced" role="dialog" aria-modal="true" aria-labelledby="darkroom-locked-title">
-              <div className="darkroom-door__content">
-                <LockSimple className="darkroom-door__lock" size={32} weight="light" aria-hidden="true" />
-                <div className="darkroom-door__dialogue">
-                  <h2 className="darkroom-door__line is-visible" id="darkroom-locked-title">{defaultDarkroom.lockedTitle}</h2>
-                  <p className="darkroom-door__line is-visible">{defaultDarkroom.lockedQuestion}</p>
-                  <p className="darkroom-door__line is-visible">{defaultDarkroom.lockedCopy}</p>
-                  <p className="darkroom-door__line is-visible">你可以在门口等一会儿。</p>
-                </div>
-                <div className="darkroom-door__countdown is-visible" role="status">
-                  <time dateTime={selectedDarkroomEntry.unlockAt || undefined}>{formatDarkroomUnlockAt(selectedDarkroomEntry.unlockAt)}</time>
-                  <p>{darkroomRemainingSeconds > 0 ? `距离开门还有 ${formatDarkroomCountdown(darkroomRemainingSeconds)}` : "正在等待信件开启。"}</p>
-                </div>
-                <div className="darkroom-door__actions is-visible">
-                  <button ref={darkroomFocusRef} type="button" onClick={() => setDarkroomEntryId(null)}>回到门口</button>
-                </div>
-              </div>
-            </section>
-          ) : (
             <section ref={darkroomDialogRef} className="darkroom-open-room" role="dialog" aria-modal="true" aria-labelledby="darkroom-open-title">
               <header>
-                <div>
-                  <span>OPEN</span>
-                  <h2 id="darkroom-open-title">{defaultDarkroom.title}</h2>
-                </div>
-                <button type="button" onClick={() => setDarkroomOpen(false)}>
-                  <X size={18} weight="light" aria-hidden="true" />回到日记
+                <h2 ref={darkroomFocusRef} tabIndex={-1} id="darkroom-open-title" className="sr-only">{defaultDarkroom.title}</h2>
+                <button type="button" onClick={closeDarkroom}>
+                  <X size={18} weight="light" aria-hidden="true" />
+                  回到日记
                 </button>
               </header>
-              <div className="darkroom-open-room__body">
-                <aside aria-label="暗房日记">
-                  <p>门后的日记</p>
-                  {darkroomEntries.map((entry) => {
-                    const sealed = isDarkroomEntryLocked(entry, darkroomClock);
-                    return <button className={`darkroom-letter-index${sealed ? " is-sealed" : ""}${selectedDarkroomEntry?.id === entry.id ? " is-active" : ""}`}
-                      key={entry.id} type="button" onClick={() => setDarkroomEntryId(entry.id)}
-                      aria-label={sealed ? `未开启的信，${formatDarkroomUnlockAt(entry.unlockAt)} 开启` : `读信：${entry.title}`}>
-                      {!sealed ? <time dateTime={entry.date}>{entry.date.replaceAll("-", ".")}</time> : null}
-                      <strong>{sealed ? "???" : entry.title}</strong>
-                      <span>{sealed ? `${formatDarkroomUnlockAt(entry.unlockAt)} 开启` : `${identityName(entry.role)} · ${entry.role}`}</span>
-                    </button>;
-                  })}
-                </aside>
-                <article ref={darkroomReaderRef}>
-                  {selectedDarkroomEntry ? (
-                    <div className="darkroom-open-room__page" key={selectedDarkroomEntry.id}>
+
+              <div className="darkroom-open-room__body darkroom-open-room__body--letters">
+                <article>
+                  {darkroomEntries.length ? (
+                    <div className="darkroom-letter-table">
                       <header>
-                        <time dateTime={selectedDarkroomEntry.date}>
-                          {formatDiaryDate(selectedDarkroomEntry.date)} · {selectedDarkroomEntry.time} · {identityName(selectedDarkroomEntry.role)}
-                        </time>
-                        <h3 ref={darkroomFocusRef} tabIndex={-1}>{selectedDarkroomEntry.title}</h3>
+                        <DarkroomTitle />
+                        <h3 className="darkroom-whisper">
+                          <span aria-hidden="true" />
+                          <span>留在这里的<span className="darkroom-whisper__emphasis">话</span></span>
+                          <span aria-hidden="true" />
+                        </h3>
                       </header>
-                      <DarkroomLetter key={`${selectedDarkroomEntry.id}:${selectedDarkroomEntry.revision}`} id={selectedDarkroomEntry.id} content={selectedDarkroomEntry.body} />
+                      <div className="darkroom-letter-list" aria-label="信件">
+                        <p className="darkroom-letter-count">{darkroomEntries.length} 封信</p>
+                        {darkroomEntries.map(entry => <DarkroomLetter key={entry.id} entry={entry}
+                          open={darkroomEntryId === entry.id} sealed={isDarkroomEntryLocked(entry, darkroomClock)}
+                          clock={darkroomClock} unlockLabel={formatDarkroomUnlockAt(entry.unlockAt)} countdown={formatDarkroomCountdown}
+                          onToggle={() => setDarkroomEntryId(current => current === entry.id ? null : entry.id)} />)}
+                      </div>
                     </div>
                   ) : (
                     <div className="darkroom-open-room__empty">
                       <BookOpenText size={25} weight="light" aria-hidden="true" />
-                      <h3 ref={darkroomFocusRef} tabIndex={-1}>{darkroomEntries.length ? "选一封信，慢慢读。" : "这里还没有信。"}</h3>
+                      <h3>这里还没有信。</h3>
+                      <p>留给以后的话，会在这里等着。</p>
                     </div>
                   )}
                 </article>
               </div>
             </section>
-          )}
         </div>
       ) : null}
     </div>

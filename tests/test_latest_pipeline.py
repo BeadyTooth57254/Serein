@@ -17,6 +17,11 @@ def curator_task(settings):
         p.submit(settings.database,task['job_id'],output_for(task['role'],task['request']))
         task=asyncio.run(p.advance(settings.database,include_recent=True))
     assert task['role']=='event_curator'
+    # These are host validator tests. Agent transport intentionally omits the
+    # host's full evidence snapshot; reload that snapshot for direct validation.
+    with Store(settings.database,read_only=True) as store:
+        task['request']=json.loads(store.conn.execute(
+            'SELECT request_json FROM pipeline_jobs WHERE id=?',(task['job_id'],)).fetchone()[0])
     return task
 
 
@@ -179,6 +184,59 @@ def test_router_api_repair_receives_missing_field_and_preserves_sources(settings
         assert store.conn.execute('SELECT count(*) FROM raw_processing').fetchone()[0] == 0
 
 
+def test_curator_api_repair_removes_unneeded_bridge_exclusion_without_adding_an_event(settings, monkeypatch):
+    ingest(settings)
+    save_settings(settings.database, {
+        'models': [{'id': 'local', 'model': 'synthetic', 'base_url': 'http://127.0.0.1:9/v1'}],
+        'assignments': {role: 'local' for role in p.ROLES},
+        'pipeline': {'execution_mode': 'api', 'joint_review_enabled': True}})
+    curator_calls = []
+    proposals = []
+    async def complete(model, payload):
+        with Store(settings.database, read_only=True) as store:
+            request = json.loads(store.conn.execute(
+                'SELECT request_json FROM pipeline_jobs WHERE output_json IS NULL ORDER BY rowid DESC LIMIT 1'
+            ).fetchone()[0])
+        output = output_for(request['role'], request)
+        if request['role'] == 'track_router':
+            output['message_assignments'][0].update(context_track_refs=['new:2'], routing_role='bridge')
+            output['track_updates'].append({'track_ref': 'new:2', 'subject': 'Earlier reading list',
+                'throughline': 'Earlier background only', 'event_policy': 'default', 'status': 'parked'})
+        elif request['role'] == 'event_curator':
+            curator_calls.append(payload)
+            unit = next(unit for unit in request['component']['memberships'] if unit['routing_role'] == 'bridge')
+            output['events'][0]['primary_track_id'] = unit['track_id']
+            proposals.append(copy.deepcopy(output['events']))
+            other = next(edge['track_id'] for edge in request['component']['context_edges']
+                         if edge['unit_root_message_id'] == unit['unit_root_message_id'])
+            assert all(event['primary_track_id'] != other for event in output['events'])
+            if len(curator_calls) == 1:
+                source = next(m for m in request['component']['messages'] if m['id'] == unit['unit_root_message_id'])
+                output['decision_review']['bridge_exclusions'] = [{
+                    'unit_root_message_id': unit['unit_root_message_id'], 'excluded_track_id': other,
+                    'reason': 'Only background',
+                    'evidence': [{'source_message_id': source['id'], 'quote': source['content']}]}]
+            else:
+                correction = payload['messages'][1]['content']
+                assert 'No missing side' in correction and 'bridge_exclusions: []' in correction
+                assert 'Do not create an Event or change ownership' in correction
+                output['decision_review']['bridge_exclusions'] = []
+        return {'choices': [{'message': {'content': json.dumps(output)}}]}
+    monkeypatch.setattr('serein.model_runtime.complete', complete)
+    result = asyncio.run(p.advance(settings.database, include_recent=True))
+    assert result['events'] == 1 and len(curator_calls) == 2
+    assert proposals[0] == proposals[1]
+    with Store(settings.database, read_only=True) as store:
+        saved = json.loads(store.conn.execute(
+            "SELECT output_json FROM pipeline_jobs WHERE role LIKE 'event_curator:%'").fetchone()[0])
+        assert saved['decision_review']['bridge_exclusions'] == []
+        assert len(saved['events']) == 1
+        assert [row[0] for row in store.conn.execute('SELECT id FROM raw_events ORDER BY id')] == [1, 2]
+        assert [tuple(row) for row in store.conn.execute(
+            'SELECT raw_id,outcome FROM raw_processing ORDER BY raw_id')] == [(1, 'settled'), (2, 'settled')]
+        assert store.conn.execute("SELECT count(*) FROM pipeline_attempts WHERE COALESCE(error,'')<>''").fetchone()[0] == 1
+
+
 @pytest.mark.parametrize('action,base_count,expected', [
     ('create', 1, '0'), ('extend', 0, '1'), ('rewrite', 0, '1'),
     ('merge', 0, 'at least 2'), ('merge', 1, 'at least 2'),
@@ -225,10 +283,12 @@ def test_curator_continuing_track_without_saved_event_uses_one_create(settings):
 def test_curator_repeated_omission_retains_scope_without_skipping(settings):
     ingest(settings)
     calls = []
+    reviewed = []
     async def runner(role, request):
         output = output_for(role, request)
         if role == 'event_curator':
             calls.append(request['prompt'])
+            reviewed.append([m['id'] for m in request['component']['messages']])
             output['events'][0]['owned_unit_roots'].pop()
         return output
     result = asyncio.run(p.advance(settings.database, include_recent=True, runner=runner))
@@ -240,8 +300,9 @@ def test_curator_repeated_omission_retains_scope_without_skipping(settings):
     with Store(settings.database) as store:
         store.conn.execute("UPDATE raw_events SET created_at='2025-01-01T00:02:00Z' WHERE id=3")
         store.conn.execute("UPDATE raw_events SET created_at='2025-01-01T00:03:00Z' WHERE id=4")
-    assert asyncio.run(p.advance(settings.database, include_recent=True, runner=runner))['status'] == 'current'
-    assert len(calls) == 2  # New messages must not cause a same-day retry of the held range.
+    assert asyncio.run(p.advance(settings.database, include_recent=True, runner=runner))['status'] == 'processed'
+    assert len(calls) == 4  # Only the two new originals are reviewed; the old range stays reserved.
+    assert reviewed[2:]==[[3,4],[3,4]]
     with Store(settings.database, read_only=True) as store:
         assert store.conn.execute('SELECT count(*) FROM raw_processing').fetchone()[0] == 0
 
@@ -262,7 +323,7 @@ def test_agent_curator_second_omission_retains_scope(settings):
         assert store.conn.execute('SELECT count(*) FROM raw_processing').fetchone()[0] == 0
 
 
-def test_repeated_curator_omission_pauses_on_third_round_and_retry_can_correct(settings, monkeypatch):
+def test_repeated_curator_omission_waits_for_explicit_resume(settings, monkeypatch):
     ingest(settings)
     fail = True
     async def runner(role, request):
@@ -275,19 +336,18 @@ def test_repeated_curator_omission_pauses_on_third_round_and_retry_can_correct(s
     new_batch = p.new_batch
     monkeypatch.setattr(p, 'new_batch', lambda database, include_recent, **kwargs:
                         new_batch(database, include_recent, clock=clock, **kwargs))
+    first=asyncio.run(p.advance(settings.database,include_recent=True,runner=runner))
+    assert first['status']=='processed' and first['events']==0
     for _ in range(2):
-        retained = asyncio.run(p.advance(settings.database, include_recent=True, runner=runner))
-        assert retained['status'] == 'processed' and retained['events'] == 0
         clock += timedelta(days=1)
-    first = asyncio.run(p.advance(settings.database, include_recent=True, runner=runner))
-    assert first['status'] == 'paused' and '累计三轮漏项' in first['reason']
-    assert first['job_id'] and first['failures'] == 3
+        assert asyncio.run(p.advance(settings.database,include_recent=True,runner=runner))['status']=='current'
     with Store(settings.database, read_only=True) as store:
         frozen = store.conn.execute('SELECT input_json FROM pipeline_batches WHERE id=?', (first['batch_id'],)).fetchone()[0]
         assert store.conn.execute('SELECT count(*) FROM raw_processing').fetchone()[0] == 0
-    p.retry_batch(settings.database, first['batch_id'])
-    with Store(settings.database, read_only=True) as store:
-        assert store.conn.execute('SELECT input_json FROM pipeline_batches WHERE id=?', (first['batch_id'],)).fetchone()[0] == frozen
+    from serein.extensions.pipeline_pending import resume
+    with Store(settings.database,read_only=True) as store:
+        pending_id=store.conn.execute('SELECT id FROM pipeline_pending_materials WHERE batch_id=?',(first['batch_id'],)).fetchone()[0]
+    resume(settings.database,pending_id)
     fail = False
     assert asyncio.run(p.advance(settings.database, include_recent=True, runner=runner))['events'] == 1
 
@@ -865,7 +925,7 @@ def test_failed_image_finishes_summary_and_manual_retry_remains_available(settin
         {'source_event_id':'other-a','session_id':'other','role':'assistant','text':'Independent synthetic answer','created_at':'2025-01-01T00:03:00Z'}],source='test')
     assert asyncio.run(p.advance(settings.database,include_recent=True,runner=failing))['events']==1
     assert asyncio.run(p.advance(settings.database,include_recent=True,runner=failing))['status']=='current'
-    assert len(calls)==2
+    assert len(calls)==1  # Unread old candidates do not retry their failed images.
     from fastapi.testclient import TestClient
     from serein.api.http import create_app
     client=TestClient(create_app(settings,token='test',live=True),headers={'Authorization':'Bearer test'})
@@ -875,7 +935,7 @@ def test_failed_image_finishes_summary_and_manual_retry_remains_available(settin
     from serein.work_tasks import enqueue, pause
     enqueue(settings.database,'pipeline')
     assert client.post('/v1/pipeline/retry-image',json={'sha256':calls[0]}).json()['status']=='busy'
-    assert image_failures(settings.database,calls[0])==2
+    assert image_failures(settings.database,calls[0])==1
     pause(settings.database,'pipeline')
     assert client.post('/v1/pipeline/retry-image',json={'sha256':calls[0]}).status_code==200
     async def success(role,request):
@@ -953,7 +1013,7 @@ def test_image_api_counts_each_failed_request_and_waiting_agent_does_not(setting
     p.submit(settings.database,task['job_id'],output_for('track_router',task['request']))
     waiting=asyncio.run(p.advance(settings.database,include_recent=True))
     assert waiting['request']['transcription_only']
-    assert waiting['request']['execution']['task']=='image_transcription'
+    assert waiting['request']['execution']['task']=='track_router'
     sha=waiting['request']['images'][0]['sha256']
     assert image_failures(settings.database,sha)==0
     save_settings(settings.database,{'pipeline':{'execution_mode':'api'},'models':[{'id':'local','model':'synthetic','base_url':'http://127.0.0.1:9/v1'}],
@@ -968,7 +1028,7 @@ def test_image_api_counts_each_failed_request_and_waiting_agent_does_not(setting
         return {'choices':[{'message':{'content':json.dumps(output_for(request['role'],request))}}]}
     monkeypatch.setattr('serein.model_runtime.complete',complete)
     result=asyncio.run(p.advance(settings.database,include_recent=True))
-    assert len(calls)==3 and image_failures(settings.database,sha)==3
+    assert len(calls)==1 and image_failures(settings.database,sha)==1
     assert result['events']==1 and result['deferred']==0
 
 
